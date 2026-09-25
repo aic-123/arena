@@ -648,9 +648,10 @@ class TestRealCorpus(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("折不出来", doc)
         self.assertIn("不是独立观测", doc)
-        # 两处标记不全的地方：不补标，但要指名
-        self.assertIn("B1", doc)
-        self.assertIn("D3", doc)
+        # 那两处标记的结论要指名：**不补标**，而且说明为什么不补
+        self.assertIn("B1 n3 / D3 n3 为什么不标", doc)
+        # 标记的判据也要在 —— 它是 `proposed_count` 的输入，不能只写结论
+        self.assertIn("类型是 `Assumption`，且它的文本在原文里一个字都搬不过来", doc)
 
 
 class TestStep09Vote(Base):

@@ -2,6 +2,10 @@
 
     python samples/align.py
 
+**它做两件事**：① 逐节点给覆盖率，看哪些能折出边界；② 核「原文未出现」标记
+是不是符合判据（判据见下面 `ABSENT_MARK` 那段）—— 那个标记是 `proposed_count`
+的输入，它漂了值就跟着漂，而且看不出来。
+
 **为什么要有这个文件**：`boundaries` 一直是空的，理由是「标签节点文本是转述不是原文
 切片」。那句话是我说的，它**没有被量过**。这个脚本就是量它的工具，用的是标准库
 成熟的序列对齐方案 `difflib.SequenceMatcher`（`autojunk=False`）。
@@ -125,11 +129,53 @@ def classify(source: str, node_text: str) -> tuple[str, dict | None]:
     return ("对不上" if a["coverage"] == 0.0 else "转述"), a
 
 
+# 「原文未出现」这个标记的判据（2026-09-25 需求方定）。`main()` 会逐节点核它。
+#
+#   标「原文未出现」 ⟺ 类型是 `Assumption`，且文本在原文里一个字都搬不过来。
+#
+# 两条都要，缺一条就会改错 —— 下面两个反例都是**量过**的：
+#
+# - 只用 `coverage == 0`：会把**重转述**和**括号注释**误算成「原文没有」。
+#   0007 B4 的 n2「原因是聪明」/ n3「原因不是努力」覆盖率 0%，可标签文件 `:91`
+#   明写「n3 是独立命题」；0019 F2 n2、0020 F3 n2 覆盖率也是 0%，那是括号注释。
+#   覆盖率量的是**搬了多少字**，不是**内容在不在** —— 两者都 0%，它分不开。
+# - 只用「是不是关系节点」：0004 B1 的 n3「n1 导致 n2」判 `非文本`，
+#   可「所以」实实在在占 [11:13]；0016 E2 的 n2 含 `+` 也判 `非文本`，
+#   而它的两个半句都在原文里。
+ABSENT_MARK = "原文未出现"
+
+
+def marker_should_be(label: str, kind: str, a: dict | None) -> bool:
+    """这个节点**该不该**带「原文未出现」标记。判据见上面那段注释。"""
+    return label == "Assumption" and a is not None and a["coverage"] == 0.0
+
+
+def marker_mismatches() -> tuple[int, list[str]]:
+    """(标记总数, 与判据不符的逐条说明)。
+
+    不符分两种，都要报：**该标没标**、**不该标却标了**。
+    这个标记是 `proposed_count` 的输入，它漂了 `proposed_count` 跟着漂，而且看不出来。
+    """
+    total, bad = 0, []
+    for (num, source), (sec, _t, rows) in zip(inputs(), labelled()):
+        for nid, label, content, absent in rows:
+            if absent:
+                total += 1
+            kind, a = classify(source, content)
+            if marker_should_be(label, kind, a) == absent:
+                continue
+            cov = f"{a['coverage']:.0%}" if a else "—"
+            bad.append(f"{num} {sec} {nid}（{label}）"
+                       f"{'标了' if absent else '没标'}，"
+                       f"{'该标' if not absent else '不该标'} —— "
+                       f"实测 {kind}／覆盖 {cov}")
+    return total, bad
+
+
 def main() -> None:
     ins = inputs()
     labs = labelled()
     print(f"输入 {len(ins)} 条，标签 {len(labs)} 节，MIN_RUN={MIN_RUN}\n")
-
     tally = {"逐字": 0, "转述": 0, "非文本": 0, "对不上": 0}
     absent_n = 0
     foldable = []
@@ -169,6 +215,18 @@ def main() -> None:
     for k, v in tally.items():
         print(f"  {k:5} {v}")
     print(f"  {'原文未出现':5} {absent_n}（不参与折算，不是失败）")
+
+    total, bad = marker_mismatches()
+    if bad:
+        print(f"\n⚠️ 「{ABSENT_MARK}」标记与判据不符 {len(bad)} 处"
+              f"（共 {total} 处标记）：")
+        for line in bad:
+            print(f"   {line}")
+        print(f"   判据：类型是 `Assumption` 且覆盖率 0 —— 见 align.py 里那段注释。")
+    else:
+        print(f"  ⇒ 「{ABSENT_MARK}」{total} 处标记**全部符合判据**"
+              f"（类型是 `Assumption` + 覆盖率 0）")
+
     print(f"\n可折出 boundaries 的样本：{sum(1 for _, ok in foldable if ok)} / 20"
           f"  →  {' '.join(n for n, ok in foldable if ok) or '无'}")
     print(f"不可折：{' '.join(n for n, ok in foldable if not ok)}")
@@ -223,7 +281,10 @@ def write_back() -> None:
         out.append(body)
         cursor = end
     out.append(text[cursor:])
-    INPUTS.write_text("".join(out), encoding="utf-8")
+    # `newline="\n"` 不能省。默认值在 Windows 上会把 `\n` 翻成 `\r\n`，
+    # 于是这个「重新生成」的工具会把整份文件悄悄改成 CRLF，
+    # 把 `.gitattributes` 钉的 LF 策略抹掉 —— 而且 git 只在提交时才警告。
+    INPUTS.write_text("".join(out), encoding="utf-8", newline="\n")
     print(f"已写回 {INPUTS}")
 
 

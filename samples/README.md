@@ -38,6 +38,8 @@ B8 管「声明待标注的块，标注区必须空」，B13 管「有值的块�
 
 **我怎么读第 3 条**：标签文件里每条样本都列了节点表（节点数 + 每个节点的文本）。
 `proposed_count` 直接从节点数折（减掉标着「原文未出现」的）。
+那个标记本身有判据，2026-09-25 需求方定：**类型是 `Assumption` 且文本在原文里
+一个字都搬不过来**。`samples/align.py` 逐节点核它，不符就报（见 `annotation-derived.md` §1）。
 `boundaries` 要先把节点文本**对回原文**才知道落在哪 —— 用标准库
 `difflib.SequenceMatcher` 对齐，工具是 `samples/align.py`（可重跑）。
 

@@ -204,7 +204,7 @@ input_origin: 需求方 2026-09-25
 annotation_status: 需求方授权折算
 annotation:
   proposed_count: 2
-  proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点
+  proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点（Assumption 且覆盖率 0）
   boundaries: [[2, 8], [10, 14]]
   boundaries_basis: 折算 —— 全部 2 个内容节点逐字出现在原文里，切片直接对上（samples/align.py，MIN_RUN=3）
   agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
@@ -218,7 +218,7 @@ input_origin: 需求方 2026-09-25
 annotation_status: 需求方授权折算
 annotation:
   proposed_count: 2
-  proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点
+  proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点（Assumption 且覆盖率 0）
   boundaries: [[0, 8], [12, 17]]
   boundaries_basis: 折算 —— 全部 2 个内容节点逐字出现在原文里，切片直接对上（samples/align.py，MIN_RUN=3）
   agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
@@ -232,7 +232,7 @@ input_origin: 需求方 2026-09-25
 annotation_status: 需求方授权折算
 annotation:
   proposed_count: 2
-  proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点
+  proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点（Assumption 且覆盖率 0）
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 0%)、n2(覆盖 60%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
   agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划

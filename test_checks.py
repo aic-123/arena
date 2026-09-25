@@ -48,7 +48,10 @@ def _scan_with_temp_py(source: str) -> dict:
     try:
         return {code: run() for code, _what, _clause, run in checks.all_checks()}
     finally:
-        probe.unlink()
+        # `missing_ok=True`：收尾不该因为「文件已经不在」而抛 ——
+        # 那会把**真正的**异常盖掉，报出来变成一个看不懂的 `FileNotFoundError`。
+        # 「有没有残留」由 Test00（开跑前）和 TestNoResidue（跑完后）各管一次。
+        probe.unlink(missing_ok=True)
 
 
 class Test00NoResidueAtStart(unittest.TestCase):
@@ -78,7 +81,9 @@ class Test00NoResidueAtStart(unittest.TestCase):
     """
 
     def test_no_residue_before_the_run_starts(self):
-        left = sorted(p.name for p in ROOT.rglob("_tmp_probe*"))
+        # 报**绝对路径**，不报 `p.name` —— `rglob` 是递归的，只给文件名的话
+        # 看不出残留在哪个目录，等于没报。
+        left = sorted(str(p.resolve()) for p in ROOT.rglob("_tmp_probe*"))
         self.assertEqual(
             left, [],
             f"开跑前就有残留：{left} —— 上一轮被打断了"
@@ -208,7 +213,7 @@ class TestB8Fires(unittest.TestCase):
             mine = [h for h in hits if "_tmp_probe" in h[0]]
             self.assertEqual(len(mine), 2, f"B8 没抓到，实际：{hits}")
         finally:
-            probe.unlink()
+            probe.unlink(missing_ok=True)
 
     def test_B8_lets_a_truly_annotated_sample_through(self):
         """需求方真标完之后，B8 就不该再管它。"""
@@ -228,7 +233,7 @@ class TestB8Fires(unittest.TestCase):
             hits = checks.check_placeholder_not_annotated()
             self.assertFalse([h for h in hits if "_tmp_probe" in h[0]])
         finally:
-            probe.unlink()
+            probe.unlink(missing_ok=True)
 
 
 class TestB9Fires(unittest.TestCase):
@@ -245,7 +250,7 @@ class TestB9Fires(unittest.TestCase):
         try:
             return checks.check_apparatus_is_not_a_script(probe)
         finally:
-            probe.unlink()
+            probe.unlink(missing_ok=True)
 
     def test_B9_fires_on_each_of_the_three_red_lines(self):
         for src, why in (
@@ -293,7 +298,7 @@ class TestB13Fires(unittest.TestCase):
             return [h for h in checks.check_annotated_samples_name_their_source()
                     if "_tmp_probe" in h[0]]
         finally:
-            probe.unlink()
+            probe.unlink(missing_ok=True)
 
     def test_B13_fires_when_a_value_has_no_author(self):
         hits = self._probe(
@@ -342,7 +347,7 @@ class TestB12Fires(unittest.TestCase):
         try:
             return checks.check_proposition_type_is_not_hardcoded(probe)
         finally:
-            probe.unlink()
+            probe.unlink(missing_ok=True)
 
     def test_B12_fires_on_a_hardcoded_proposition_type(self):
         for ty in ("Claim", "Evidence"):
@@ -368,7 +373,8 @@ class TestNoResidue(unittest.TestCase):
     """
 
     def test_no_probe_files_left_behind(self):
-        left = [p.name for p in ROOT.rglob("_tmp_probe*")]
+        # 同样报绝对路径 —— `rglob` 是递归的，只给文件名看不出在哪。
+        left = sorted(str(p.resolve()) for p in ROOT.rglob("_tmp_probe*"))
         self.assertEqual(left, [], f"有验伪残留物没清掉：{left}")
 
     def test_exempt_set_is_exactly_the_falsification_harness(self):
