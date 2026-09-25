@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 import checks
@@ -1569,6 +1571,387 @@ class TestGap04ChallengeDomain(Base):
             self.conn, type_="Mechanism", content={"text": "链"}, origin="甲")
         with self.assertRaises(ScaffoldError):
             debate.challenge(self.conn, target_id=mech, text="不对", by="乙")
+
+
+class TestBrailleCanvas(unittest.TestCase):
+    """Braille 点阵。**这张映射表写错一位，整张图就是歪的** —— 而歪的图看起来
+    还是像一张正常的图，所以它必须被钉住，不能靠「跑一遍看着对」。
+
+    参照：`plotille` / `uniplot` / `brailleplot` 用的都是同一套
+    （一个字符 2×4 点，U+2800 区）。
+    """
+
+    # 8 点单元在 Unicode 里的实际排布：(1)(4) / (2)(5) / (3)(6) / (7)(8)
+    DOTS = {(0, 0): 0x01, (1, 0): 0x08,
+            (0, 1): 0x02, (1, 1): 0x10,
+            (0, 2): 0x04, (1, 2): 0x20,
+            (0, 3): 0x40, (1, 3): 0x80}
+
+    def test_every_dot_lands_on_the_unicode_bit(self):
+        for (x, y), bit in self.DOTS.items():
+            c = vote._Canvas(1, 1)
+            c.set(x, y)
+            got = ord(c.rows_of(colour=False)[0][0]) - 0x2800
+            self.assertEqual(got, bit, f"点 ({x},{y}) 应落在 0x{bit:02x}，实际 0x{got:02x}")
+
+    def test_the_eight_dots_of_one_cell_add_up_to_0xff(self):
+        """一个格子的八个点全点亮 → U+28FF。少一位就凑不满。"""
+        c = vote._Canvas(1, 1)
+        for (x, y) in self.DOTS:
+            c.set(x, y)
+        self.assertEqual(c.rows_of(colour=False)[0], "\u28ff")
+
+    def test_an_empty_cell_is_a_blank_braille_not_a_space(self):
+        """用 U+2800 而不是空格：两者的字宽不一定一样，混着用整张图会错位。"""
+        self.assertEqual(vote._Canvas(2, 1).rows_of(colour=False)[0], "\u2800\u2800")
+
+    def test_out_of_range_is_ignored_not_raised(self):
+        """插值会走到边界外，那是常事 —— 抛出来会让一张图画不出来。"""
+        c = vote._Canvas(1, 1)
+        for x, y in ((-1, 0), (0, -1), (2, 0), (0, 4), (99, 99)):
+            c.set(x, y)
+        self.assertEqual(c.rows_of(colour=False)[0], "\u2800")
+
+    def test_a_near_vertical_line_stays_connected(self):
+        """**Bresenham 而不是采样** —— 采样会让近垂直线断成一列虚线。
+
+        这是这套画法里最容易做错的一处：采样看起来「也画出来了」，
+        只是近垂直线变成虚线，而虚线在图上读起来像是「数据有断点」。
+        """
+        c = vote._Canvas(4, 4)
+        c.line(0, 0, 1, 15)
+        for i, row in enumerate(c.rows_of(colour=False)):
+            self.assertNotEqual(row, "\u2800" * 4, f"第 {i} 行是空的 —— 线断了")
+
+    def test_colour_wraps_only_the_cells_that_have_dots(self):
+        c = vote._Canvas(2, 1)
+        c.set(0, 0, "36")
+        row = c.rows_of(colour=True)[0]
+        self.assertEqual(row.count("\033[36m"), 1)
+        self.assertTrue(row.startswith("\033[36m"))
+        self.assertNotIn("\033[36m\u2800", row)
+
+    def test_colour_off_leaves_no_escape_at_all(self):
+        c = vote._Canvas(2, 1)
+        c.set(0, 0, "36")
+        self.assertNotIn("\033", c.rows_of(colour=False)[0])
+
+
+class TestColourPolicy(unittest.TestCase):
+    """上不上色的判据。照 `NO_COLOR`（no-color.org）那条通行约定。
+
+    ⚠️ 这里**手写**替换 `sys.stdout` / `vote._parse`，不用 `unittest.mock`。
+    不是偏好问题：本目录有个 `concurrent.py`，它把标准库的 `concurrent` 包**遮住了**，
+    而 `unittest.mock` 会 `import asyncio` → `asyncio` 要 `concurrent.futures` →
+    拿到本目录那个文件 → `ModuleNotFoundError: No module named 'concurrent.futures'`。
+    见 DECLARATION §15（那条待你拍板的改名）。
+    """
+
+    class _TTY:
+        def isatty(self):
+            return True
+
+    def _with(self, tty, **env):
+        """在给定的环境变量 + tty 判定下，问一次「上不上色」。"""
+        saved_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
+        saved_out = sys.stdout
+        try:
+            for k in ("NO_COLOR", "FORCE_COLOR"):
+                os.environ.pop(k, None)
+            os.environ.update({k: v for k, v in env.items() if v is not None})
+            sys.stdout = self._TTY() if tty else self._NotATty()
+            return vote._colour_on(None)
+        finally:
+            sys.stdout = saved_out
+            for k, v in saved_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    class _NotATty:
+        def isatty(self):
+            return False
+
+    def test_explicit_argument_wins_over_everything(self):
+        self.assertTrue(vote._colour_on(True))
+        self.assertFalse(vote._colour_on(False))
+
+    def test_a_tty_gets_colour(self):
+        self.assertTrue(self._with(tty=True))
+
+    def test_a_redirected_stream_does_not(self):
+        """重定向到文件时颜色只是噪声 —— 而且图例里的数不受影响。"""
+        self.assertFalse(self._with(tty=False))
+
+    def test_no_color_turns_it_off(self):
+        self.assertFalse(self._with(tty=True, NO_COLOR="1"))
+
+    def test_an_empty_no_color_is_treated_as_not_set(self):
+        """约定的一部分：`NO_COLOR=` 空串**不算设了**（不然一个空的 shell 变量
+        会把所有人的颜色都关掉，而设它的人并没有表达这个意思）。"""
+        self.assertTrue(self._with(tty=True, NO_COLOR=""))
+
+    def test_force_color_wins_over_no_color(self):
+        self.assertTrue(self._with(tty=True, NO_COLOR="1", FORCE_COLOR="1"))
+
+
+class TestVoteChart(Base):
+    """`vote.chart()` —— 票数的折线图。
+
+    需求方 2026-09-25 定的四件事：**终端 Braille 文本图**、只画**当前层级**、
+    **`derived_from` 派生的子论点另开一张**、多条曲线叠一张图靠 **ANSI 颜色** 区分。
+    """
+
+    def setUp(self):
+        super().setUp()
+        d = debate.open_debate(self.conn, question="远程办公效率更高吗？", by="需求方")
+        self.debate_id = d["debate"]
+        self.topic, self.a = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id, text="远程办公效率更高。", by="甲")
+        self.b = _one_claim(self.conn, debate_id=self.debate_id,
+                            text="坐办公室效率更高。", by="乙", topic_id=self.topic)
+
+    def _vote(self, choice, by):
+        vote.cast_vote(
+            self.conn, topic_id=self.topic, choice=choice, by=by,
+            seen=vote.vote_context(self.conn, self.topic),
+            sampling="half-random", prior_results_visible=False,
+            repeat_participation=False)
+
+    def _kid(self, text="远程办公效率更高（限定版）。"):
+        """加一个派生子论点：`derived_from` 的方向是**子 → 父**。"""
+        kid = _one_claim(self.conn, debate_id=self.debate_id, text=text, by="甲",
+                         topic_id=self.topic)
+        rid = scaffold.add_relation(self.conn, kind="derived_from",
+                                    from_id=kid, to_id=self.a, origin="甲")
+        return kid, rid
+
+    def _dump(self):
+        return {t: self.conn.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"]
+                for t in ("artifact", "revision", "relation", "event", "draft")}
+
+    # ---- 空与退化：不许长得像「零」----------------------------------------
+
+    def test_no_votes_draws_no_empty_coordinate_system(self):
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertIn("还没有票", out)
+        self.assertIn("票数为零不等于倾向为零", out)
+        self.assertNotIn("└", out, "没有票却画了一个空坐标系")
+
+    def test_a_single_vote_is_not_drawn_as_a_line(self):
+        """一个点不是折线。画出来会让人以为「票数就是这样」。"""
+        self._vote(self.a, "u1")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertIn("只有 1 票", out)
+        self.assertIn("画不出折线", out)
+        self.assertNotIn("└", out)
+        # 但票数本身照样报出来 —— 画不出来不等于不报
+        self.assertIn("最终 1 票", out)
+
+    def test_the_same_instant_degrades_the_axis_and_says_so(self):
+        """所有票挤在同一时刻时，横轴**退化成票序号**。
+
+        真库里这一支几乎走不到（`created_at` 有微秒），但走到的时候必须说清楚 ——
+        不说的话，一张竖直的线看起来像是「票数在瞬间暴涨」。
+        """
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        frozen = datetime(2026, 9, 25, tzinfo=timezone.utc)
+        saved = vote._parse
+        vote._parse = lambda ts: frozen
+        try:
+            out = vote.chart(self.conn, self.topic, colour=False)
+        finally:
+            vote._parse = saved
+        self.assertIn("退化成票序号", out)
+        self.assertIn("不是时间", out)
+
+    # ---- 画出来了 ---------------------------------------------------------
+
+    def test_two_votes_draw_braille_with_both_ends_labelled(self):
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertIn("└", out)
+        self.assertIn("1 ┤", out)          # 顶刻度 = 最高累计票数
+        self.assertIn("0 ┤", out)          # 底刻度
+        self.assertIn("横轴 = 时间", out)
+        self.assertTrue(any("\u2800" <= ch <= "\u28ff" for ch in out),
+                        "一个 Braille 字符都没有 —— 画布是空的")
+
+    def test_a_claim_with_no_votes_is_listed_with_zero_not_dropped(self):
+        """`§C5.3` 空是合法的，但**空要说出来**：0 票的论点也得在图例里。"""
+        self._vote(self.a, "u1")
+        self._vote(self.a, "u2")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertIn("claim-0002", out)
+        self.assertIn("最终 0 票", out)
+
+    def test_legend_is_ordered_by_id_not_by_votes(self):
+        """`§C9` #5 #7：不许有名次。票多的不许排前面。"""
+        for who, ch in (("u1", self.a), ("u2", self.b), ("u3", self.a)):
+            self._vote(ch, who)
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertLess(out.index("claim-0001"), out.index("claim-0002"))
+        self.assertIn("按 id 排，不按票数", out)
+
+    def test_it_says_out_loud_that_this_is_not_a_right_or_wrong_call(self):
+        """`§C12.1`：页首页尾各说一次。图比数更容易被读成结论，所以不能省。
+
+        ⚠️ 函数名**故意不用** `truth` / `verdict` 那两个词：B2 / B5 是逐行正则，
+        它们分不出「写了这个词」和「写了一条不许有这个词的断言」。
+        要说的意思写在这儿（docstring 按 `checks.py` 的口径不算产物行为）。
+        """
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertEqual(out.count("不是真理判定"), 1)
+        self.assertIn("不是对错", out)
+        self.assertIn("没有任何「哪条更重要」", out)
+
+    # ---- 层级：当前层级一张，派生子论点各一张 -----------------------------
+
+    def test_a_derived_child_is_not_drawn_on_the_parent_chart(self):
+        """`§C12.4`：`A1 derived_from A` 允许，`A1 inherits votes from A` **禁止**。"""
+        kid, _rid = self._kid()
+        for who, ch in (("u1", self.a), ("u2", self.b), ("u3", kid)):
+            self._vote(ch, who)
+        out = vote.chart(self.conn, self.topic, colour=False)
+        main, _, child = out.partition("── 子论点")
+        self.assertNotIn(kid, main, "派生子论点混进了当前层级那张图")
+        self.assertIn(f"子论点 {kid}（derived_from {self.a}）", out)
+        self.assertIn("另开一张", out)
+        self.assertIn("另有 1 票投在派生子论点上", main)
+
+    def test_a_rejected_derived_from_edge_puts_it_back_on_the_main_chart(self):
+        """`§C2.4`：边可拒绝。推翻之后它就不是子论点了 —— 图要跟着变。"""
+        kid, rid = self._kid()
+        scaffold.reject_relation(self.conn, rid, by="甲")
+        self._vote(self.a, "u1")
+        self._vote(kid, "u2")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertNotIn("子论点", out)
+        self.assertIn(kid, out, "边被推翻了，它就该回到当前层级里")
+
+    # ---- 版本：旧票属于旧问题版本 -----------------------------------------
+
+    def test_two_question_versions_are_two_charts_never_one_line(self):
+        """`§C12.5` 的核心：绝不跨版本相加。"""
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        scaffold.revise(self.conn, self.topic, author="需求方",
+                        content={"text": "远程办公效率更高吗？（改过）",
+                                 "raw_text": "远程办公效率更高吗？"})
+        self._vote(self.a, "u3")
+
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertEqual(out.count("── Topic"), 2, "两个问题版本被画成了同一张")
+        self.assertIn("共 2 票", out)
+        self.assertIn("共 1 票", out)
+        self.assertNotIn("共 3 票", out)
+
+    def test_the_version_label_carries_the_question_it_belongs_to(self):
+        """只印一个 revision 行号，读者读不出这是哪一版。
+
+        而且这一版问的**不是**讨论的题目：题目（`远程办公效率更高吗？`）从头到尾
+        不变，变的是**议题自己**那一版的原话。所以标签必须印**那一版的议题原文**
+        —— 印讨论题目等于没印，两版看起来会一模一样。
+        """
+        self._vote(self.a, "u1")
+        scaffold.revise(self.conn, self.topic, author="需求方",
+                        content={"text": "远程办公效率更高吗？（改过）",
+                                 "raw_text": "远程办公效率更高吗？"})
+        self._vote(self.a, "u2")
+        self._vote(self.b, "u3")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertIn("问题版本 revision #", out)
+        # 改版前那一版，带的是它自己那句
+        self.assertIn("「远程办公效率更高。」", out)
+        # 改版后那一版，带的是改过的那句
+        self.assertIn("「远程办公效率更高吗？（改过）」", out)
+        # 讨论的题目**不该**出现在版本标签里 —— 它不随版本变
+        self.assertNotIn("「远程办公效率更高吗？」", out)
+
+    def test_charts_follow_the_order_the_versions_were_first_voted_on(self):
+        """顺序按「哪一版先有人投」，不按行号 —— 行号是 revision 的**行号**，
+        按字符串排会把 `#10` 排到 `#2` 前面（真的这么错过一次）。
+        """
+        self._vote(self.a, "u1")
+        scaffold.revise(self.conn, self.topic, author="需求方",
+                        content={"text": "远程办公效率更高吗？（改过）",
+                                 "raw_text": "远程办公效率更高吗？"})
+        self._vote(self.a, "u2")
+        self._vote(self.b, "u3")
+
+        first: dict = {}
+        for row in self.conn.execute(
+                "SELECT v.id FROM relation r JOIN artifact v ON v.id = r.to_id"
+                " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
+                "   AND v.type = 'Vote' ORDER BY v.id", (self.topic,)):
+            ver = scaffold.content_of(self.conn, row["id"])["question_version"]
+            first.setdefault(ver, row["id"])
+        out = vote.chart(self.conn, self.topic, colour=False)
+        shown = [int(m) for m in re.findall(r"问题版本 revision #(\d+)", out)]
+        self.assertEqual(shown, list(first))
+
+    # ---- 颜色 -------------------------------------------------------------
+
+    def test_colour_adds_escapes_and_a_swatch_per_option(self):
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        out = vote.chart(self.conn, self.topic, colour=True)
+        self.assertIn("\033[", out)
+        self.assertIn("\033[0m", out)
+        self.assertNotIn("本输出没有颜色", out)
+
+    def test_without_colour_it_says_the_lines_cannot_be_told_apart(self):
+        """Braille 字符不带颜色 —— 没有颜色时那几条线在字符层面就是合并的。
+
+        所以**必须说出来**，而且图例里的数要一直在：不说的话，一份重定向到文件的
+        输出看起来还是一张正常的图，而它其实读不出哪条是哪条。
+        """
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        out = vote.chart(self.conn, self.topic, colour=False)
+        self.assertNotIn("\033", out, "说了没颜色，却还有转义序列")
+        self.assertIn("本输出没有颜色", out)
+        self.assertIn("分不开", out)
+        self.assertIn("最终 1 票", out)      # 可读的那部分照样在
+
+    # ---- 只读与边界 -------------------------------------------------------
+
+    def test_drawing_writes_nothing(self):
+        """`§C2.5` 第 3 档：派生视图不得写回底层（`§C7.1` ④）。"""
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        before = self._dump()
+        vote.chart(self.conn, self.topic, colour=True)
+        vote.chart(self.conn, self.topic, colour=False)
+        self.assertEqual(self._dump(), before)
+
+    def test_passing_a_debate_id_where_a_topic_belongs_is_refused(self):
+        """静默画出一张「还没有票」的图，是比报错更坏的一种错。"""
+        self._vote(self.a, "u1")
+        self._vote(self.b, "u2")
+        with self.assertRaises(ScaffoldError):
+            vote.chart(self.conn, self.debate_id, colour=False)
+        with self.assertRaises(ScaffoldError):
+            vote.chart(self.conn, "topic-9999", colour=False)
+
+    def test_a_topic_with_no_claims_says_there_is_nothing_to_draw(self):
+        d = debate.open_debate(self.conn, question="空议题", by="甲")
+        empty = _topic_and_first_claim(
+            self.conn, debate_id=d["debate"], text="还没定。", by="甲")[0]
+        # 把唯一那条命题从 Topic 上摘掉，造出「有 Topic 没命题」的形状
+        for row in self.conn.execute(
+                "SELECT id FROM relation WHERE from_id = ? AND kind = 'contains'",
+                (empty,)).fetchall():
+            self.conn.execute("UPDATE relation SET state = 'rejected' WHERE id = ?",
+                              (row["id"],))
+        self.conn.commit()
+        out = vote.chart(self.conn, empty, colour=False)
+        self.assertIn("没有可画的东西", out)
 
 
 if __name__ == "__main__":

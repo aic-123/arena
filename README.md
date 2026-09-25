@@ -11,6 +11,7 @@ python cli.py new "加班该不该给钱？" 甲
 python cli.py submit debate-0001 甲 "现在的工作强度太大了，所以大家都不愿意往上爬。"
 python cli.py confirm debate-0001 draft-0001 甲     # 逐条问，一条一条答
 python cli.py view debate-0001
+python cli.py chart topic-0001     # 票数的折线图（终端 Braille 文本图）
 python cli.py observe
 ```
 
@@ -72,8 +73,15 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
 
 **还剩一个没关**，别把「能跑通」读成产品完整：
 
-- **投票（`§C12`）没接。** 它要一份渲染那一刻抓的 `vote_context()`（`§C12.3`），
+- **投票的「投」没接（`§C12`）。** 它要一份渲染那一刻抓的 `vote_context()`（`§C12.3`），
   先得有「投票页」—— 选项怎么呈现给人是产品判断，不是实现细节。
+  **「看」那一面接了**（2026-09-25）：`cli.py chart <topic_id>` 画票数折线图，
+  见 DECLARATION §16。
+
+**另外有一处未决，等你拍板**：本目录的 `concurrent.py` 把标准库的 `concurrent`
+包**遮住了** —— 在 `arena/` 下 `import asyncio` 会炸（`ModuleNotFoundError:
+No module named 'concurrent.futures'`）。现在没有影响（产物代码不 import 它，
+测试已绕开），但下一个在这个目录下写异步代码的人会撞上。要不要改名见 DECLARATION §15。
 
 **两条写路径已统一**（2026-09-25，DECLARATION §14）：`add_position` 那条
 「不分割、不逐条确认、只存 `{text, raw_text}`」的路**已删除**，
@@ -86,14 +94,14 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
 | 文件 | 是什么 |
 |---|---|
 | `DECLARATION.md` | 《选型声明》`§T4.2` —— 每个选择连同它的否证检查 |
-| `cli.py` | **人用的那一面**。薄的一层：只调已有的动作，不新增写路径。投票没接，见 DECLARATION §13 |
+| `cli.py` | **人用的那一面**。薄的一层：只调已有的动作，不新增写路径。投票只接了「看」（`chart`），「投」没接，见 DECLARATION §13.5 |
 | `scaffold.py` | **Scaffold 层**：Artifact / Relation / Revision。不认识「用户」「投票」「分歧」 |
 | `debate.py` | **Arena 层**：讨论行为。依赖方向单向，`uses` Scaffold |
 | `segment.py` | 确定性规则分割器。**不做语义改写**——命题文本必是原文逐字切片 |
 | `confirm.py` | 语义确认（`§C5`）。确认的是**意义有没有被歪曲**，不是挑哪段进入结构 |
 | `observe.py` | 观测点（`§C7.2`）。**只记怎么算，不说什么叫「高」**。派生视图只读 |
 | `hints.py` | `§C2.1`「提示可能的子问题」。**只发现，不提出**——指回用户自己写过的问题 |
-| `vote.py` | 投票（`§C12`）。四个量分离、**永不给它们之间加算子**。旧票不跨问题版本相加 |
+| `vote.py` | 投票（`§C12`）。四个量分离、**永不给它们之间加算子**。旧票不跨问题版本相加。`chart()` 是只读派生视图：**一张图一个 `question_version`**、派生子论点另开一张、终端 Braille 折线图 |
 | `concurrent.py` | `§T2` 第 10 步的并发装置。N 个真进程、**无协调**、只调产品 API（B9 盯着） |
 | `checks.py` | `§T4.2` 的可执行否证检查 B1–B13 |
 | `test_arena.py` | 最小可跑检查 |
@@ -114,8 +122,10 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
 不排序、不打分、不加锁、不设阈值、不做上层归纳。
 依据见 `DECLARATION.md` §4 —— 这些不是省略，是 `§C11.2` `§C7.1` `§C7.2` 明确要求的。
 
-**允许的派生视图只有两处**，都是只读、不写回、不建对象：
+**允许的派生视图只有三处**，都是只读、不写回、不建对象：
 
 - `observe.py` 的比率 / 计数 —— 分母为 0 时显示「算不出」而不是 0
 - `hints.py` 的子问题提示 —— 只指回用户原文里的位置，**不生成任何问题**
   （`§C2.0`：系统不得代替用户提出议题，只能发现并提示）
+- `vote.py` 的 `chart()` 折线图 —— 只画**已有票**的累计，不排序、不设阈值、
+  **不跨问题版本**（旧票属于旧问题，`§C12.5`）

@@ -5,6 +5,7 @@
     python cli.py rewrite <debate_id> <draft_id> <谁> "<重写的那句话>"
     python cli.py confirm <debate_id> <draft_id> <谁>
     python cli.py view <debate_id>
+    python cli.py chart <topic_id>
     python cli.py observe
 
 库文件默认 `arena.db`，用环境变量 `ARENA_DB` 换。
@@ -23,9 +24,10 @@
 
 --- 还没接的东西（别把「能跑通」读成「产品完整」）------------------------
 
-- **投票（`§C12`）没接。** `cast_vote()` 要一份**渲染那一刻**抓的
+- **投票的「投」没接。** `cast_vote()` 要一份**渲染那一刻**抓的
   `vote_context()`（`§C12.3`）—— 那要求先有「投票页」这个东西，
   而「选项怎么呈现给人」是产品判断，不是实现细节。见 DECLARATION §13。
+  `chart` 只接了**看**那一面（只读派生视图，不写库，`§C2.5` 第 3 档）。
 - **Ctrl-C / 读到输入结束都不算「不提交」。** 那种情况下草稿留在 `open`，
   一个字都不写。理由：那是**用户离开了**还是**脚本出错了**，这里分不出来，
   分不出来就不许替它归因（`§C7.2` 的「中途放弃」要的是真放弃）。
@@ -42,6 +44,7 @@ import confirm
 import debate
 import observe
 import scaffold
+import vote
 
 
 def _open() -> sqlite3.Connection:
@@ -214,6 +217,21 @@ def cmd_view(conn: sqlite3.Connection, argv: list[str]) -> int:
     return 0
 
 
+def cmd_chart(conn: sqlite3.Connection, argv: list[str]) -> int:
+    """票数的折线图（`§C12.2` 的「公众倾向」那一项）。
+
+    按 **Topic** 画，不按 Debate —— 票挂在 Topic 下（`§C12.5`），
+    一个 Debate 下的几个 Topic 各有各的投票上下文，合成一张图就是跨议题相加。
+
+    颜色**不在这里判断**：`vote.chart()` 自己按 `NO_COLOR` / 是不是终端决定。
+    `cli.py` 只是把它印出来 —— 这一层不做判断，判断在 `vote.py`。
+    """
+    if len(argv) <= 2:
+        raise scaffold.ScaffoldError("缺参数。\n用法：python cli.py chart <topic_id>")
+    print(vote.chart(conn, argv[2]))
+    return 0
+
+
 def cmd_observe(conn: sqlite3.Connection, argv: list[str]) -> int:
     print(observe.render(conn))
     return 0
@@ -225,6 +243,7 @@ COMMANDS = {
     "rewrite": cmd_rewrite,
     "confirm": cmd_confirm,
     "view": cmd_view,
+    "chart": cmd_chart,
     "observe": cmd_observe,
 }
 

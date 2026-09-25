@@ -36,6 +36,27 @@ import checks
 ROOT = Path(__file__).parent
 
 
+def _clean_probes() -> None:
+    """把验伪探针**连编译产物一起**清掉。
+
+    为什么不是只删 `_tmp_probe_zzz.py` / `samples/_tmp_probe_zzz.md` 那两个路径：
+    探针 `.py` 只要被**编译**过一次（`python -m compileall .`、或任何 import 它的
+    东西），就会在 `__pycache__/` 下留下 `_tmp_probe_zzz.cpython-3xx.pyc`。
+    那个 `.pyc` 删不掉的话，`Test00NoResidueAtStart` 下一轮就红，
+    而它报的是「上一轮被打断了」—— **误导**。
+
+    **2026-09-25 实测踩到过**：跑完 `python -m compileall .` 之后
+    `test_checks.py` 连红两次（`Test00` 和 `TestNoResidue` 各一次），
+    真正的原因是一个 `.pyc`，而 `rm -f _tmp_probe_zzz.py` 永远删不到它。
+    所以这里用 `rglob` 一次扫干净 —— 「残留自愈」这条规矩要自愈得彻底。
+
+    `missing_ok=True`：收尾不该因为「文件已经不在」而抛 —— 那会把**真正的**
+    异常盖掉，报出来变成一个看不懂的 `FileNotFoundError`。
+    """
+    for p in ROOT.rglob("_tmp_probe*"):
+        p.unlink(missing_ok=True)
+
+
 def _scan_with_temp_py(source: str) -> dict:
     """把 source 写成一个临时 .py 放进 arena/，跑完**全部**检查，删掉。"""
     probe = ROOT / "_tmp_probe_zzz.py"
@@ -43,15 +64,13 @@ def _scan_with_temp_py(source: str) -> dict:
     # 为什么改成自愈，见 `Test00NoResidueAtStart` —— 一条残留会让十几条用例
     # 连锁失败，而且第一条失败报的地方和真正的原因无关。
     # 「有没有残留」这个问题由开头那一条和结尾那一条各管一次。
-    probe.unlink(missing_ok=True)
+    _clean_probes()
     probe.write_text(source, encoding="utf-8")
     try:
         return {code: run() for code, _what, _clause, run in checks.all_checks()}
     finally:
-        # `missing_ok=True`：收尾不该因为「文件已经不在」而抛 ——
-        # 那会把**真正的**异常盖掉，报出来变成一个看不懂的 `FileNotFoundError`。
         # 「有没有残留」由 Test00（开跑前）和 TestNoResidue（跑完后）各管一次。
-        probe.unlink(missing_ok=True)
+        _clean_probes()
 
 
 class Test00NoResidueAtStart(unittest.TestCase):
@@ -75,7 +94,7 @@ class Test00NoResidueAtStart(unittest.TestCase):
     所以把「有没有残留」**收敛成两条、各管一头**：
     - 本类管**上一轮**留下的（跑在第一条）
     - `TestNoResidue` 管**这一轮**留下的（跑在最后一条）
-    中间的 helper 一律 `unlink(missing_ok=True)` 自愈，不再各自断言。
+    中间的 helper 一律 `_clean_probes()` 自愈，不再各自断言。
 
     这和本仓库一直在防的那类病是同一个：**残留和检查失效长得一模一样**。
     """
@@ -87,7 +106,15 @@ class Test00NoResidueAtStart(unittest.TestCase):
         self.assertEqual(
             left, [],
             f"开跑前就有残留：{left} —— 上一轮被打断了"
-            f"（管道提前关闭 / Ctrl-C / 进程被杀）。删掉再跑。",
+            f"（管道提前关闭 / Ctrl-C / 进程被杀）。"
+            # ⚠️ 这句必须把 `__pycache__` 说出来。2026-09-25 实测：
+            # 探针 `.py` 被 `compileall` 编译过一次之后，残留物是
+            # `__pycache__/_tmp_probe_zzz.cpython-3xx.pyc` —— 而
+            # `rm -f _tmp_probe_zzz.py` **删不到它**。旧文案只说「删掉再跑」，
+            # 于是照着做的人会卡在「删了还是红」的循环里。
+            "清掉再跑：`rm -f _tmp_probe_zzz.py samples/_tmp_probe_zzz.md`"
+            " **以及** `rm -f __pycache__/_tmp_probe_zzz.*.pyc`"
+            "（探针被编译过的话，残留物是那个 .pyc）。",
         )
 
 
@@ -197,7 +224,7 @@ class TestB8Fires(unittest.TestCase):
 
     def test_B8_fires_on_a_filled_annotation(self):
         probe = ROOT / "samples" / "_tmp_probe_zzz.md"
-        probe.unlink(missing_ok=True)
+        _clean_probes()
         probe.write_text(
             "## 9999\n\n```yaml\n"
             "input: \"x\"\n"
@@ -213,12 +240,12 @@ class TestB8Fires(unittest.TestCase):
             mine = [h for h in hits if "_tmp_probe" in h[0]]
             self.assertEqual(len(mine), 2, f"B8 没抓到，实际：{hits}")
         finally:
-            probe.unlink(missing_ok=True)
+            _clean_probes()
 
     def test_B8_lets_a_truly_annotated_sample_through(self):
         """需求方真标完之后，B8 就不该再管它。"""
         probe = ROOT / "samples" / "_tmp_probe_zzz.md"
-        probe.unlink(missing_ok=True)
+        _clean_probes()
         probe.write_text(
             "## 9999\n\n```yaml\n"
             "input: \"x\"\n"
@@ -233,7 +260,7 @@ class TestB8Fires(unittest.TestCase):
             hits = checks.check_placeholder_not_annotated()
             self.assertFalse([h for h in hits if "_tmp_probe" in h[0]])
         finally:
-            probe.unlink(missing_ok=True)
+            _clean_probes()
 
 
 class TestB9Fires(unittest.TestCase):
@@ -245,12 +272,12 @@ class TestB9Fires(unittest.TestCase):
 
     def _probe(self, src: str) -> list:
         probe = ROOT / "_tmp_probe_zzz.py"
-        probe.unlink(missing_ok=True)
+        _clean_probes()
         probe.write_text(src, encoding="utf-8")
         try:
             return checks.check_apparatus_is_not_a_script(probe)
         finally:
-            probe.unlink(missing_ok=True)
+            _clean_probes()
 
     def test_B9_fires_on_each_of_the_three_red_lines(self):
         for src, why in (
@@ -292,13 +319,13 @@ class TestB13Fires(unittest.TestCase):
 
     def _probe(self, body: str) -> list:
         probe = ROOT / "samples" / "_tmp_probe_zzz.md"
-        probe.unlink(missing_ok=True)
+        _clean_probes()
         probe.write_text(body, encoding="utf-8")
         try:
             return [h for h in checks.check_annotated_samples_name_their_source()
                     if "_tmp_probe" in h[0]]
         finally:
-            probe.unlink(missing_ok=True)
+            _clean_probes()
 
     def test_B13_fires_when_a_value_has_no_author(self):
         hits = self._probe(
@@ -342,12 +369,12 @@ class TestB12Fires(unittest.TestCase):
 
     def _probe(self, src: str) -> list:
         probe = ROOT / "_tmp_probe_zzz.py"
-        probe.unlink(missing_ok=True)
+        _clean_probes()
         probe.write_text(src, encoding="utf-8")
         try:
             return checks.check_proposition_type_is_not_hardcoded(probe)
         finally:
-            probe.unlink(missing_ok=True)
+            _clean_probes()
 
     def test_B12_fires_on_a_hardcoded_proposition_type(self):
         for ty in ("Claim", "Evidence"):

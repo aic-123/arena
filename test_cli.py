@@ -182,6 +182,64 @@ class TestWrongId(Base):
         self.assertNotIn("远程办公的效率比坐办公室高", self.ok("view", d))
 
 
+class TestChart(Base):
+    """`chart` 命令 —— 从**终端**这一头看到的东西。
+
+    这里能钉的只有入口和那几条「不许长得像零」的规矩：`cli.py` **没有**「投」这个
+    命令（`cast_vote()` 要一份渲染时抓的 `vote_context()`，那要求先有投票页，
+    见 DECLARATION §13）。所以 CLI 这一头**画不出折线** —— 折线的渲染在
+    `test_arena.py::TestVoteChart` 里用库直接验。
+    这里验的是：入口接上了、报错照原话、管道里不上色、以及「没有票」不许
+    装成「票数为零」。
+    """
+
+    def _topic(self) -> tuple[str, str]:
+        d = self.debate()
+        dr = self.submit(d, "甲", "远程办公的效率比坐办公室高。")
+        self.ok("confirm", d, dr, "甲", stdin="y\n")
+        topic = re.search(r"Topic (topic-\d+)", self.ok("view", d)).group(1)
+        return d, topic
+
+    def test_没有票时不画空坐标系_而且照实说没有票(self):
+        _d, topic = self._topic()
+        out = self.ok("chart", topic)
+        self.assertIn("还没有票", out)
+        self.assertIn("票数为零不等于倾向为零", out)
+        self.assertNotIn("└", out, "没有票却印了一个空坐标系")
+
+    def test_把讨论的号当议题传进去会被拒(self):
+        """票挂在 Topic 下，所以图也按 Topic 画 —— 拿 Debate 的号来要图是错的。"""
+        d, _topic = self._topic()
+        p = self.run_cli("chart", d)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("不是 Topic", p.stderr)
+        self.assertEqual(p.stdout, "", "报了错就不该再印一张看着正常的图")
+
+    def test_管道里不上色(self):
+        """颜色按 `NO_COLOR` 约定判断（`no-color.org`）：不是终端就不上色。
+
+        `cli.py` 这一层**不做这个判断**（它只管印），所以这里验的是
+        「判断确实发生了」—— 管道里出来的必须是裸字符，不带 ANSI 转义。
+        「不上色时要说出来」那一条要有票才走得到（没票就没有线可分），
+        在 `test_arena.py::TestVoteChart` 里用库直接验。
+        """
+        _d, topic = self._topic()
+        p = self.run_cli("chart", topic)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("\033[", p.stdout, "管道里不该有 ANSI 转义")
+
+    def test_反对排序的那句话要走到终端这一头(self):
+        """`§C9` #5 #7 / `§C12.1`：不许有名次，票数是偏好计数不是对错。
+
+        库层说了不算 —— 它得**出现在用户真正看到的那些字里**。
+        """
+        _d, topic = self._topic()
+        out = self.ok("chart", topic)
+        self.assertIn("公共偏好", out)
+        self.assertIn("不是真理判定", out)
+        self.assertIn("没有排序轴，没有阈值", out)
+
+
 class TestUsage(Base):
     def test_没有参数就印用法_退出码_2(self):
         p = self.run_cli()
@@ -197,6 +255,11 @@ class TestUsage(Base):
         p = self.run_cli("submit", "debate-0001")
         self.assertEqual(p.returncode, 1)
         self.assertIn("缺参数", p.stderr)
+
+    def test_chart_缺参数报的是用法(self):
+        p = self.run_cli("chart")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("python cli.py chart", p.stderr)
 
 
 if __name__ == "__main__":
