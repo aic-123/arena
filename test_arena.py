@@ -34,6 +34,46 @@ class Base(unittest.TestCase):
         scaffold.init(self.conn)
 
 
+def _confirmed(conn, *, debate_id, text, by, topic_id=None) -> dict:
+    """走**真路**提交一句话：propose → 逐条确认 → 进讨论。
+
+    `topic_id=None` 新开一个 Topic（`debate.open_topic`）；给一个已有 Topic 就挂上去
+    （`debate.add_to_topic`）。两条出口都是产品里真有的动作 ——
+    **测试不许自己造捷径**（`§12.1`：测试得自己造产品没有的能力，那个能力就不存在）。
+
+    2026-09-25 之前这里走的是 `debate.add_position()`：不分割、不逐条确认、
+    只存 `{text, raw_text}`。那条路已经删了。
+    """
+    confirm.ensure_schema(conn)          # 走真路就得有 draft 表
+    draft = confirm.propose(conn, text=text, by=by)
+    keys = [x["key"] for x in confirm.payload_of(conn, draft)["propositions"]]
+    if topic_id is None:
+        return debate.open_topic(conn, debate_id=debate_id, draft_id=draft,
+                                 by=by, reviewed=keys)
+    return debate.add_to_topic(conn, topic_id=topic_id, draft_id=draft,
+                               by=by, reviewed=keys)
+
+
+def _one_claim(conn, *, debate_id, text, by, topic_id=None) -> str:
+    """同上，但只用于**单命题**文本，直接返回那一条的 id（测试里绝大多数是这种）。"""
+    out = _confirmed(conn, debate_id=debate_id, text=text, by=by, topic_id=topic_id)
+    ids = list(out["claims"].values())
+    if len(ids) != 1:
+        raise AssertionError(f"「{text}」被切成了 {len(ids)} 条 —— 这个 helper 只用于单命题")
+    return ids[0]
+
+
+def _topic_and_first_claim(conn, *, debate_id, text, by) -> tuple[str, str]:
+    """走真路开一个 Topic，返回 `(topic_id, 第一条命题的 id)`。
+
+    `open_debate()` 现在**不带 Topic**（见它的 docstring），所以「先白拿一个 Topic、
+    再往上挂命题」那种写法没有了。本 helper 走的就是产品那条路：
+    「提交 → 分割 → 逐条确认 → 新开一个 Topic」。用例要 Topic 就得这么要一个。
+    """
+    out = _confirmed(conn, debate_id=debate_id, text=text, by=by)
+    return out["topic"], list(out["claims"].values())[0]
+
+
 class TestStep02MinimalArtifact(Base):
     def test_artifact_gets_identity_state_and_origin(self):
         aid = scaffold.add_artifact(
@@ -147,10 +187,13 @@ class TestStep04Debate(Base):
         d = debate.open_debate(
             self.conn, question="现在社会对女性太好了，所以她们根本不懂男性压力。",
             by="user:alice")
-        debate.add_position(
-            self.conn, topic_id=d["topic"], text="女性获得了更好的社会待遇", by="user:alice")
-        debate.add_position(
-            self.conn, topic_id=d["topic"], text="女性不足够理解男性压力", by="user:bob")
+        # 一段原文一个 Topic：甲先交一段（新开一个 Topic），乙的话挂进**同一个** Topic。
+        # 谁和谁在同一个议题里争，由 Debate 那一层表达。
+        topic, _ = _topic_and_first_claim(
+            self.conn, debate_id=d["debate"],
+            text="女性获得了更好的社会待遇", by="user:alice")
+        _one_claim(self.conn, debate_id=d["debate"],
+                   text="女性不足够理解男性压力", by="user:bob", topic_id=topic)
 
         v = debate.view(self.conn, d["debate"])
         self.assertEqual(len(v["topics"]), 1)
@@ -161,9 +204,11 @@ class TestStep04Debate(Base):
     def test_view_keeps_submission_order_only(self):
         """`§C9` #5 #7：视图里不许出现任何表示「哪条更重要」的量。"""
         d = debate.open_debate(self.conn, question="Q", by="user:a")
-        for who in ("user:a", "user:b", "user:c"):
-            debate.add_position(
-                self.conn, topic_id=d["topic"], text=f"立场 {who}", by=who)
+        topic, _ = _topic_and_first_claim(
+            self.conn, debate_id=d["debate"], text="立场 user:a", by="user:a")
+        for who in ("user:b", "user:c"):
+            _one_claim(self.conn, debate_id=d["debate"], text=f"立场 {who}",
+                       by=who, topic_id=topic)
         v = debate.view(self.conn, d["debate"])
         claims = v["topics"][0]["claims"]
         # 顺序按 id，不按提交者、不按票数、不按时间
@@ -198,8 +243,9 @@ class TestConfirmedDraftEntersADebate(Base):
 
         v = debate.view(self.conn, self.d["debate"])
         ids = [t["topic"]["id"] for t in v["topics"]]
-        # 开讨论时那个原始提问的 topic + 两份 draft 各自的 topic
-        self.assertEqual(ids, [self.d["topic"], a["topic"], b["topic"]])
+        # 两份 draft 各自的 Topic —— `open_debate` 现在不带 Topic 了，
+        # 所以视图里就是这两条，一条不多。
+        self.assertEqual(ids, [a["topic"], b["topic"]])
 
         by_topic = {t["topic"]["id"]: t for t in v["topics"]}
         self.assertEqual([c["claim"]["id"] for c in by_topic[a["topic"]]["claims"]],
@@ -235,8 +281,9 @@ class TestConfirmedDraftEntersADebate(Base):
 
     def test_passing_a_topic_id_where_a_debate_belongs_is_refused(self):
         """传错 id 必须报错。`view()` 传错会静默返回一个形状正常的结果 —— 这里不学它。"""
+        a = self._submit("远程办公的效率比坐办公室高。", "甲")
         with self.assertRaises(ScaffoldError):
-            debate.open_topic(self.conn, debate_id=self.d["topic"], draft_id="x",
+            debate.open_topic(self.conn, debate_id=a["topic"], draft_id="x",
                               by="甲", reviewed=["A"])
         with self.assertRaises(ScaffoldError):
             debate.open_topic(self.conn, debate_id="debate-9999", draft_id="x",
@@ -497,10 +544,28 @@ class TestStep06ObservationPoints(Base):
         self.assertEqual(e["分母"], 1)
 
     def test_overrule_counts_machine_edges_only(self):
-        """`§C2.4`：改判率量的是**机器产出的边**被推翻的比例。用户自己建的边不算。"""
+        """`§C2.4`：改判率量的是**机器产出的边**被推翻的比例。用户自己建的边不算。
+
+        ⚠️ 2026-09-25 走真路之后，这条用例露出了一件旧写法看不见的事：
+        `confirm()` 写进来的 `contains`（Topic → Claim）**也是机器产的**
+        （`origin=machine:segmenter/…`），所以它们**落在分母里**。
+        旧写法走 `add_position`，一条边都不建，分母才恰好是 1。
+        （非机器边有两条：`open_topic()` 建的 `debate → topic`，以及本用例
+        自己建的那条 `contradicts`。所以下面不数「非机器边有几条」——
+        那个数会随着写路径怎么建边而漂。）
+
+        所以下面不再写死那个数 —— 写死就会把「分母里都有什么」藏起来，
+        而那正是本条要盯的东西。**这件事本身是个待定的口径问题**：
+        `contains` 是结构边，用户没有「拒绝它」这个动作（`§C5` 给的是
+        「意义被歪曲」→ 整份不写），所以它会把改判率长期压向 0 ——
+        而 `observe.py` 的备注正好警告过「接近零不能读作 AI 很准」。
+        要不要把结构边排除出去，是一次口径判断（`§T0.3`），不在这里自决。
+        """
         d = debate.open_debate(self.conn, question="Q", by="user:a")
-        c1 = debate.add_position(self.conn, topic_id=d["topic"], text="P1", by="user:a")
-        c2 = debate.add_position(self.conn, topic_id=d["topic"], text="P2", by="user:b")
+        topic, c1 = _topic_and_first_claim(
+            self.conn, debate_id=d["debate"], text="P1", by="user:a")
+        c2 = _one_claim(self.conn, debate_id=d["debate"], text="P2", by="user:b",
+                        topic_id=topic)
 
         machine = scaffold.add_relation(
             self.conn, kind="supports", from_id=c1, to_id=c2, origin="machine:seg-1")
@@ -509,10 +574,23 @@ class TestStep06ObservationPoints(Base):
         scaffold.reject_relation(self.conn, machine, by="user:b")
         scaffold.reject_relation(self.conn, human, by="user:a")
 
+        total = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM relation").fetchone()["n"]
+        machines = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM relation WHERE origin LIKE 'machine:%'"
+        ).fetchone()["n"]
+
         e = observe.snapshot(self.conn)["overrule"]
-        self.assertEqual(e["分子"], 1)     # 只有机器那条进了分子
-        self.assertEqual(e["分母"], 1)     # 分母也只有机器那条
-        self.assertEqual(e["值"], 1.0)
+        self.assertEqual(e["分子"], 1)          # 只有机器那条进了分子
+        self.assertEqual(e["分母"], machines)   # 分母是机器边的**全部**
+        self.assertAlmostEqual(e["值"], 1 / machines)
+        # 用户自己建的那条**被拒了、一边都不进** —— 这才是本用例的要点。
+        self.assertGreater(machines, 1, "结构边没进分母？那这条用例就没在测它")
+        self.assertGreater(total - machines, 0, "一条非机器边都没有，那也测不到「不算」")
+        self.assertEqual(
+            "rejected",
+            self.conn.execute("SELECT state FROM relation WHERE id = ?",
+                              (human,)).fetchone()["state"])
 
     def test_unused_ratio_sums_counts_not_averages_ratios(self):
         """比值不能相加。分子分母**逐份累加**，不是把几个比值平均。"""
@@ -541,7 +619,7 @@ class TestStep06ObservationPoints(Base):
         换个方式就能再犯一次，所以钉住它。
         """
         d = debate.open_debate(self.conn, question="Q", by="user:a")
-        debate.add_position(self.conn, topic_id=d["topic"], text="P1", by="user:a")
+        _one_claim(self.conn, debate_id=d["debate"], text="P1", by="user:a")
 
         e = observe.snapshot(self.conn)["unrelated"]
         self.assertEqual(e["分母"], 0)          # 一条都没分类过
@@ -660,11 +738,14 @@ class TestStep09Vote(Base):
     def setUp(self):
         super().setUp()
         d = debate.open_debate(self.conn, question="远程办公效率更高吗？", by="需求方")
-        self.debate_id, self.topic = d["debate"], d["topic"]
-        self.a = debate.add_position(
-            self.conn, topic_id=self.topic, text="远程办公效率更高。", by="甲")
-        self.b = debate.add_position(
-            self.conn, topic_id=self.topic, text="坐办公室效率更高。", by="乙")
+        self.debate_id = d["debate"]
+        # 投票上下文是**一个 Topic**。一段原文一个 Topic —— 甲交的那一段
+        # （也就是他那个立场）本身就是本用例的投票上下文。
+        self.topic, self.a = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id,
+            text="远程办公效率更高。", by="甲")
+        self.b = _one_claim(self.conn, debate_id=self.debate_id,
+                            text="坐办公室效率更高。", by="乙", topic_id=self.topic)
 
     def _vote(self, choice, by):
         vote.cast_vote(
@@ -709,8 +790,8 @@ class TestStep09Vote(Base):
 
     def test_it_is_not_hardcoded_to_two_options(self):
         """`§C12.5`：数据结构**禁止写死二元**。A/B/C/D 与 A1/A2/A3 都要能承载。"""
-        others = [debate.add_position(self.conn, topic_id=self.topic,
-                                      text=f"第 {i} 种看法。", by="甲")
+        others = [_one_claim(self.conn, debate_id=self.debate_id,
+                             text=f"第 {i} 种看法。", by="甲", topic_id=self.topic)
                   for i in range(3, 6)]
         for who, opt in zip(("u1", "u2", "u3", "u4"), others + [self.a]):
             self._vote(opt, who)
@@ -760,8 +841,9 @@ class TestStep09Vote(Base):
         """
         self._vote(self.a, "u1")
         self._vote(self.a, "u2")
-        derived = debate.add_position(
-            self.conn, topic_id=self.topic, text="远程办公效率更高（限定版）。", by="甲")
+        derived = _one_claim(self.conn, debate_id=self.debate_id,
+                             text="远程办公效率更高（限定版）。", by="甲",
+                             topic_id=self.topic)
         scaffold.add_relation(self.conn, kind="derived_from",
                               from_id=derived, to_id=self.a, origin="甲")
 
@@ -807,9 +889,10 @@ class TestStep08RevisionHistory(Base):
     def setUp(self):
         super().setUp()
         d = debate.open_debate(self.conn, question="远程办公效率更高吗？", by="u1")
-        self.debate_id, self.topic = d["debate"], d["topic"]
-        self.claim = debate.add_position(
-            self.conn, topic_id=self.topic, text="远程办公效率更高。", by="u1")
+        self.debate_id = d["debate"]
+        self.topic, self.claim = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id,
+            text="远程办公效率更高。", by="u1")
 
     def test_history_lists_every_version_and_deletes_none(self):
         """`§C10`「记录，不停止，不限制」—— 一条都不略。"""
@@ -905,9 +988,10 @@ class TestStep07EvidenceChallenge(Base):
     def setUp(self):
         super().setUp()
         d = debate.open_debate(self.conn, question="远程办公效率更高吗？", by="u1")
-        self.debate_id, self.topic = d["debate"], d["topic"]
-        self.claim = debate.add_position(
-            self.conn, topic_id=self.topic, text="远程办公效率更高。", by="u1")
+        self.debate_id = d["debate"]
+        self.topic, self.claim = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id,
+            text="远程办公效率更高。", by="u1")
 
     def _claim_view(self):
         v = debate.view(self.conn, self.debate_id)
@@ -955,8 +1039,8 @@ class TestStep07EvidenceChallenge(Base):
         同一条证据：对 A 是支持，对 B 是限定。**不新建证据**。
         如果 `kind` 是 Evidence 自己的字段，这件事就表达不出来。
         """
-        other = debate.add_position(
-            self.conn, topic_id=self.topic, text="坐办公室效率更高。", by="u2")
+        other = _one_claim(self.conn, debate_id=self.debate_id,
+                           text="坐办公室效率更高。", by="u2", topic_id=self.topic)
         e = debate.add_evidence(
             self.conn, claim_id=self.claim, text="某公司全员统计。",
             by="u1", kind="supports")
@@ -1131,9 +1215,11 @@ class TestSubquestionHints(Base):
 
     def test_hinting_writes_nothing_and_creates_no_object(self):
         """提示是**派生视图**，不是结构。看一眼不能多出任何东西。"""
-        d = debate.open_debate(
-            self.conn, question="大家都在争该不该加班，但真正的问题是：加班费算不算报酬。",
-            by="u1")
+        text = "大家都在争该不该加班，但真正的问题是：加班费算不算报酬。"
+        d = debate.open_debate(self.conn, question=text, by="u1")
+        # 先走真路把这段原文变成 Topic —— 视图得有个 Topic 才看得到提示。
+        # **快照在这之后取**：本用例证的是「看视图不写东西」，不是「提交不写东西」。
+        _topic_and_first_claim(self.conn, debate_id=d["debate"], text=text, by="u1")
         before = self.conn.execute("SELECT COUNT(*) FROM artifact").fetchone()[0]
         rel_before = self.conn.execute("SELECT COUNT(*) FROM relation").fetchone()[0]
         ev_before = self.conn.execute("SELECT COUNT(*) FROM event").fetchone()[0]
@@ -1454,10 +1540,15 @@ class TestGap04ChallengeDomain(Base):
     def test_a_challenge_on_evidence_is_visible_from_the_view(self):
         """写得进去但看不见 = 半个修复。质询要能从**证据那一头**被看到。"""
         opened = debate.open_debate(self.conn, question="读书有用吗", by="甲")
+        # 一个真 Topic 当容器 —— `open_debate` 不带 Topic 了，所以走真路开一个。
+        # 下面 `claims[0]` 是 `self.claim`：本类 setUp 先建它，它的 id 最小，
+        # 而 `view()` 里的 `claims` 按 id 出。
+        topic, _ = _topic_and_first_claim(
+            self.conn, debate_id=opened["debate"], text="读书有用。", by="甲")
         for aid in (self.claim, self.evid):
             scaffold.activate(self.conn, aid, by="甲")
             scaffold.add_relation(self.conn, kind="contains",
-                                  from_id=opened["topic"], to_id=aid, origin="甲")
+                                  from_id=topic, to_id=aid, origin="甲")
         debate.link_evidence(self.conn, evidence_id=self.evid,
                              claim_id=self.claim, kind="supports", origin="甲")
         debate.challenge(self.conn, target_id=self.evid, text="过时了", by="乙")

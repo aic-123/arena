@@ -80,7 +80,9 @@ def cmd_new(conn: sqlite3.Connection, argv: list[str]) -> int:
     out = debate.open_debate(conn, question=question, by=who)
     print(f"debate: {out['debate']}")
     print(f"  「{question}」（由 {who} 提出）")
-    print(f"  它自带一个 Topic {out['topic']} —— 就是这句问题本身。")
+    print()
+    print("它**不带 Topic** —— 题目只是这个容器的标题。Topic 只能由一次")
+    print("「提交 → 分割 → 逐条确认」产生，讨论里第一段原文也是这么进去的。")
     print()
     print(f"下一步：python cli.py submit {out['debate']} {who} \"<你的原话>\"")
     return 0

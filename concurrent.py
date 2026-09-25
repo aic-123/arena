@@ -94,8 +94,13 @@ def worker(db_path: str, debate_id: str, actor: str, rounds: int, out_path: str)
     for i in range(rounds):
         text = LINES[actor][i % len(LINES[actor])]
 
-        # ① 走完整的语义确认链（`§C5`）—— 这是每条内容的必经之路
+        # ① 走完整的语义确认链（`§C5`）—— **这是唯一的写路径**
+        #
+        # 2026-09-25 之前这里还有第二步「直接提交一个立场」（`debate.add_position`）：
+        # 不分割、不逐条确认、只存 `{text, raw_text}`。那条路已经删了 ——
+        # 一条内容现在只有这一条路，本装置压的也就是产品真跑的那条。
         draft = attempt("propose", lambda t=text: confirm.propose(conn, text=t, by=actor))
+        claim = None
         if draft:
             payload = confirm.payload_of(conn, draft)
             keys = [p["key"] for p in payload["propositions"]]
@@ -109,20 +114,20 @@ def worker(db_path: str, debate_id: str, actor: str, rounds: int, out_path: str)
                 attempt("resolve_types", lambda d=draft, c=cands:
                         confirm.resolve_types(conn, d, by=actor,
                                               choices={k: v[0] for k, v in c.items()}))
-            attempt("confirm", lambda d=draft, k=keys, t=topic:
-                    confirm.confirm(conn, d, by=actor, reviewed=k, topic_id=t))
+            made = attempt("confirm", lambda d=draft, k=keys, t=topic:
+                           confirm.confirm(conn, d, by=actor, reviewed=k, topic_id=t))
+            if made:
+                # ② 要改的是「自己刚提交的那一条」。一句话可能被切成多条，
+                #    取第一条 —— 这里压的是并发，不是分割精度。
+                claim = list(made["claims"].values())[0]
 
-        # ② 直接提交一个立场
-        claim = attempt("add_position", lambda t=text, tp=topic:
-                        debate.add_position(conn, topic_id=tp, text=t, by=actor))
-
-        # ③ **改自己刚提交的那一条** —— 并发修改就发生在这里
+        # ② **改自己刚提交的那一条** —— 并发修改就发生在这里
         if claim:
             attempt("amend", lambda c=claim:
                     debate.amend_own_claim(conn, claim_id=c,
                                            text=text + "（我想说清楚点）", by=actor))
 
-        # ④ 拿当前视图，挑一条**别人**的 Claim 下手 —— 两个进程会挑到同一批
+        # ③ 拿当前视图，挑一条**别人**的 Claim 下手 —— 两个进程会挑到同一批
         others = attempt("view_and_pick", lambda: _others(conn, debate_id, actor)) or []
 
         if others:
@@ -133,7 +138,7 @@ def worker(db_path: str, debate_id: str, actor: str, rounds: int, out_path: str)
             attempt("challenge", lambda x=target, t=text:
                     debate.challenge(conn, target_id=x, text=f"{actor} 不同意：{t}", by=actor))
 
-        # ⑤ 投票。`seen` 在**提交前那一刻**抓 —— 抓完到提交之间别人可能改过，
+        # ④ 投票。`seen` 在**提交前那一刻**抓 —— 抓完到提交之间别人可能改过，
         #    那段缝就是本步要看的东西之一，不去抹平它。
         attempt("vote", lambda: vote.cast_vote(
             conn, topic_id=topic, choice=_first_claim(conn, debate_id),
@@ -162,14 +167,37 @@ def _first_claim(conn: sqlite3.Connection, debate_id: str) -> str:
     raise scaffold.ScaffoldError("还没有 Claim 可投")
 
 
+def _confirmed(
+    conn: sqlite3.Connection, *, debate_id: str, text: str, by: str,
+    topic_id: str | None = None,
+) -> str:
+    """提交一句话并确认进结构，返回它**第一条**命题的 id。**只用产品 API。**
+
+    `topic_id=None` 新开一个 Topic；给一个已有 Topic 就挂上去。
+    两条出口都落到 `confirm.confirm()` —— 和 `debate.add_to_topic` 的 docstring 同一条规矩。
+    """
+    draft = confirm.propose(conn, text=text, by=by)
+    keys = [x["key"] for x in confirm.payload_of(conn, draft)["propositions"]]
+    if topic_id is None:
+        out = debate.open_topic(conn, debate_id=debate_id, draft_id=draft,
+                                by=by, reviewed=keys)
+    else:
+        out = debate.add_to_topic(conn, topic_id=topic_id, draft_id=draft,
+                                  by=by, reviewed=keys)
+    return list(out["claims"].values())[0]
+
+
 def setup(db_path: str) -> dict:
     """初始状态。**这不是协调** —— 这是「一份要被并发操作的状态」本身。"""
     conn = scaffold.connect(db_path)
     scaffold.init(conn)
     confirm.ensure_schema(conn)
     d = debate.open_debate(conn, question="远程办公效率更高吗？", by="发起人")
-    debate.add_position(conn, topic_id=d["topic"], text="远程办公效率更高。", by="甲")
-    debate.add_position(conn, topic_id=d["topic"], text="坐办公室效率更高。", by="乙")
+    # 两份初始立场也走真路（分割 → 逐条确认 → 进讨论），第二份挂进第一个 Topic。
+    # **装置里不许有第二条写路径** —— 否则它压的是产品不走的那条。
+    first = _confirmed(conn, debate_id=d["debate"], text="远程办公效率更高。", by="甲")
+    _confirmed(conn, debate_id=d["debate"], text="坐办公室效率更高。", by="乙",
+               topic_id=first)
     conn.close()
     return d
 

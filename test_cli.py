@@ -169,9 +169,14 @@ class TestWrongId(Base):
 
     def test_确认时把议题的号当讨论的号传进去会被拒(self):
         d = self.debate()
-        dr = self.submit(d, "甲", "远程办公的效率比坐办公室高。")
+        # 视图里得先真的有一个 Topic 号可用。`new` 现在**不带 Topic**（一段原文一个
+        # Topic），所以这个号只能靠确认一段别的原文挣出来 —— 以前它白送一个。
+        dr1 = self.submit(d, "甲", "加班该给钱。")
+        self.ok("confirm", d, dr1, "甲", stdin="y\n")
         topic = re.search(r"Topic (topic-\d+)", self.ok("view", d)).group(1)
-        p = self.run_cli("confirm", topic, dr, "甲", stdin="y\n")
+
+        dr2 = self.submit(d, "甲", "远程办公的效率比坐办公室高。")
+        p = self.run_cli("confirm", topic, dr2, "甲", stdin="y\n")
         self.assertEqual(p.returncode, 1)
         self.assertIn("不是 Debate", p.stderr)
         self.assertNotIn("远程办公的效率比坐办公室高", self.ok("view", d))

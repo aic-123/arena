@@ -45,26 +45,31 @@ from scaffold import (
 
 
 def open_debate(conn: sqlite3.Connection, *, question: str, by: str) -> dict:
-    """开一个讨论：一个 Debate 容器 + 一个 Topic。
+    """开一个讨论 —— **只建 Debate 容器，不自带 Topic**。
 
-    `question` 是用户的原话，**原样存**（`§C2.2.1`：原文本不可修改）。
+    `question` 是这次讨论的题目，**原样存**（`§C2.2.1`：原文本不可修改）。
+    它是容器的标题，**不是一个 Topic** —— 一个 Debate 下可以挂多个 Topic
+    （「一段原文一个 Topic」），谁和谁在同一个议题里争由 Debate 这一层表达。
+
+    --- 为什么不再自带一个 Topic（2026-09-25 改）-----------------------------
+
+    原来这里顺手建一个 `{text, raw_text}` 的 Topic。那属于**第二条写路径**：
+    不分割、同一个调用里自我 `activate()`、只存两个字段。后果是那条路上的
+    `§C5.6` 换说法率与确认耗时**永远是 0/0**（分母来自 draft，而它不产生 draft）。
+
+    现在只剩一条写路径：`confirm.propose()` → `confirm.confirm(reviewed=[…])`
+    → `open_topic()` / `add_to_topic()`。Topic 因此只可能由一次**逐条确认**产生，
+    `input_snapshot`、两个版本号、`span`、`role`、`type_decided_by` 一个不少。
     """
     debate_id = add_artifact(
         conn, type_="Debate",
         content={"question": question},
         origin=by,
     )
-    topic_id = add_artifact(
-        conn, type_="Topic",
-        content={"text": question, "raw_text": question},
-        origin=by,
-    )
     activate(conn, debate_id, by=by)
-    activate(conn, topic_id, by=by)
-    add_relation(conn, kind="contains", from_id=debate_id, to_id=topic_id, origin=by)
-    record_event(conn, "debate_opened", by, debate_id, {"topic": topic_id})
+    record_event(conn, "debate_opened", by, debate_id, {"question": question})
     conn.commit()
-    return {"debate": debate_id, "topic": topic_id}
+    return {"debate": debate_id}
 
 
 def open_topic(
@@ -116,23 +121,30 @@ def open_topic(
     return out
 
 
-def add_position(conn: sqlite3.Connection, *, topic_id: str, text: str, by: str) -> str:
-    """在某个 Topic 下提交一个立场（Claim）。
+def add_to_topic(
+    conn: sqlite3.Connection, *, topic_id: str, draft_id: str,
+    by: str, reviewed: list[str],
+) -> dict:
+    """把一份**已确认的** draft 的命题挂进一个**已有的** Topic。
 
-    走 proposed → active 两步：**用户直接提交的内容也要过一次显式确认**。
-    这不是多此一举 —— 它保证「active 只能由一次确认产生」在存储层是**没有例外**的，
-    从而 `§C5`「未经确认不得写入 Scaffold」不靠调用方自觉。
+    和 `open_topic()` 是**同一条路的两个出口**（新 Topic / 已有 Topic）——
+    两者都落到 `confirm.confirm()`，所以分割、逐条确认、完整工件字段一个不少。
+
+    --- 这里原来是 `add_position()`（2026-09-25 改）--------------------------
+
+    `add_position()` 直接 `add_artifact(Claim, {text, raw_text})` 再在**同一个调用里**
+    `activate()`。它**看着像**「提交也要过一次确认」，可那次确认是函数自己做的：
+    调用方没有列出任何一条 `reviewed`，`§C5` 的闸门在这条路上只靠自觉。
+    它也不产生 draft，于是 `§C5.6` 的换说法率与确认耗时在这条路上永远是 `0/0`。
+    **那是遗留，不是设计**，没有文档授权它。
+
+    ⚠️ `cli.py` 现在**不走**这条路：它每次提交都新开一个 Topic（`open_topic`）。
+    留着它，是因为它是同一写路径的另一个出口，而「同一个 Topic 下多个命题」
+    这个形状需要它。**要不要让产品走它，是 DECLARATION §12.3 那个未决的产品判断**
+    （「一份原文一个 Topic」是不是硬约定），不是这里能自己定的。
     """
-    claim_id = add_artifact(
-        conn, type_="Claim",
-        content={"text": text, "raw_text": text},
-        origin=by,
-    )
-    activate(conn, claim_id, by=by)
-    add_relation(conn, kind="contains", from_id=topic_id, to_id=claim_id, origin=by)
-    record_event(conn, "position_submitted", by, claim_id, {"topic": topic_id})
-    conn.commit()
-    return claim_id
+    return confirm.confirm(conn, draft_id, by=by, reviewed=reviewed,
+                           topic_id=topic_id)
 
 
 def amend_own_claim(
