@@ -16,7 +16,18 @@
 而 `§C11.2` 的要求是「先让真实并发把问题打出来，再决定引入哪些机制」。
 先按默认跑，看它打出什么。
 
-    跑：python concurrent.py run [参与人数] [每人轮数]
+    跑：python concurrency.py run [参与人数] [每人轮数]
+
+---
+
+**2026-09-25 改名为 `concurrency.py`**（原 `concurrent.py`）：原名字把标准库的
+`concurrent` 包**遮住了**（`sys.path[0]` 是本目录），于是本目录下
+`import asyncio` / `from unittest import mock` 会报
+`ModuleNotFoundError: No module named 'concurrent.futures'` —— 报错里全是 `asyncio`，
+和出错的地方毫无关系。理由、代价、以及「为什么不挪进 `samples/`」见 DECLARATION §15。
+
+只改了**模块名**：`arena-concurrent.db` / `%TEMP%\arena-concurrent-*` 这些
+**运行时产物名**没动 —— §8.2 记着那个路径，改了就把留档的现场说岔了。
 
 ---
 
@@ -325,7 +336,7 @@ def report(result: dict) -> str:
         out.append(f"    [{x['actor']}] {x['动作']} → {x['异常类型']}: {x['异常消息']}")
     out.append("")
     out.append("【复现步骤】")
-    out.append(f"  python concurrent.py run {result['workers']} {result['rounds']}"
+    out.append(f"  python concurrency.py run {result['workers']} {result['rounds']}"
                f"      # {result['workers']} 个进程 × {result['rounds']} 轮")
     out.append(f"  跑到的库：{result['db']}")
     out.append("")

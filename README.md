@@ -28,12 +28,12 @@ python test_arena.py       # 结构与不变量的检查
 python test_cli.py         # 入口那一面的检查（子进程 + 真 stdin + 真库，测闸门）
 python test_checks.py      # 证明 checks.py 的每条检查不是空转（注入真违规，看它响不响）
 python checks.py           # 《选型声明》承诺的否证检查（退出码 0 = 全过）
-python concurrent.py run 4 6   # §T2 第 10 步：4 个进程无协调地操作同一份状态
+python concurrency.py run 4 6   # §T2 第 10 步：4 个进程无协调地操作同一份状态
 python samples/align.py    # §C5.5.1 样本：把标签节点对回原文，看 boundaries 折不折得出来
 python samples/test_align.py  # 上面那个判据自己的检查（「删」和「改」不是一回事）
 ```
 
-`concurrent.py run` 现在报 **0 异常** —— 这在第 13 步之前是「每次必撞」的那组参数。
+`concurrency.py run` 现在报 **0 异常** —— 这在第 13 步之前是「每次必撞」的那组参数。
 但它**先印换手次数再印异常**：换手是 0 的话，那句「未暴露」就没有分母，不算证据。
 
 零第三方依赖。只需 Python 3。
@@ -54,7 +54,7 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
 | 07 加 Claim/Evidence/Challenge | 完成 —— `§C4` 四条关系映射逐条落地；`§C6.1` 在写入路径上强制 |
 | 08 加 Revision | 完成 —— 谱系可见（`history_of`）。**`merge` 表达不出来**，见 DECLARATION §6.0.1 |
 | 09 加 Vote | 完成 —— 四个量分离、旧票按问题版本分组。**「主要争议」不做**，见 DECLARATION §6.0.2 |
-| 10 两个用户同时操作 | 完成 —— `concurrent.py`：N 个**真进程**、无协调、只调产品 API |
+| 10 两个用户同时操作 | 完成 —— `concurrency.py`：N 个**真进程**、无协调、只调产品 API |
 | 11 记录第一个真实并发问题 | 完成 —— **打出来了**：id 撞车。见 DECLARATION §8 |
 | 12 再引入成熟方案 | 完成 —— 让 SQLite 原子发号（`next_seq`），**不是加锁**。见 §9 |
 | 13 修掉它 / 14 再跑一遍 | 完成 —— 出事那组参数由撞 1/4/10 次变 0；加压到 8 进程 × 12 轮仍 0 |
@@ -78,10 +78,15 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
   **「看」那一面接了**（2026-09-25）：`cli.py chart <topic_id>` 画票数折线图，
   见 DECLARATION §16。
 
-**另外有一处未决，等你拍板**：本目录的 `concurrent.py` 把标准库的 `concurrent`
-包**遮住了** —— 在 `arena/` 下 `import asyncio` 会炸（`ModuleNotFoundError:
-No module named 'concurrent.futures'`）。现在没有影响（产物代码不 import 它，
-测试已绕开），但下一个在这个目录下写异步代码的人会撞上。要不要改名见 DECLARATION §15。
+**另外有一处已定（2026-09-25）**：并发装置原名 `concurrent.py`，**把标准库的
+`concurrent` 包遮住了** —— 在 `arena/` 下 `import asyncio` / `from unittest import mock`
+会报 `ModuleNotFoundError: No module named 'concurrent.futures'`（报错里全是 `asyncio`，
+和出错的地方毫无关系）。**已改名为 `concurrency.py`**，理由与代价见 DECLARATION §15。
+
+**同一处还暴露了 B9 的一个空转口**：`check_apparatus_is_not_a_script()` 在目标文件
+**不存在**时返回 `[]`（「暂不适用」），而它的用例正好断言 `== []` ——
+于是「装置干净」和「没有装置」长得一模一样，改名时漏改路径的话 B9 会**静默变成空转**。
+现在路径提成了 `checks.APPARATUS`，用例单独钉住「这个文件真的在」。
 
 **两条写路径已统一**（2026-09-25，DECLARATION §14）：`add_position` 那条
 「不分割、不逐条确认、只存 `{text, raw_text}`」的路**已删除**，
@@ -102,7 +107,7 @@ No module named 'concurrent.futures'`）。现在没有影响（产物代码不 
 | `observe.py` | 观测点（`§C7.2`）。**只记怎么算，不说什么叫「高」**。派生视图只读 |
 | `hints.py` | `§C2.1`「提示可能的子问题」。**只发现，不提出**——指回用户自己写过的问题 |
 | `vote.py` | 投票（`§C12`）。四个量分离、**永不给它们之间加算子**。旧票不跨问题版本相加。`chart()` 是只读派生视图：**一张图一个 `question_version`**、派生子论点另开一张、终端 Braille 折线图 |
-| `concurrent.py` | `§T2` 第 10 步的并发装置。N 个真进程、**无协调**、只调产品 API（B9 盯着） |
+| `concurrency.py` | `§T2` 第 10 步的并发装置（原 `concurrent.py`，2026-09-25 改名，见 DECLARATION §15）。N 个真进程、**无协调**、只调产品 API（B9 盯着） |
 | `checks.py` | `§T4.2` 的可执行否证检查 B1–B13 |
 | `test_arena.py` | 最小可跑检查 |
 | `test_cli.py` | 入口的检查。**跑的是产品那一面**：子进程 + 真 stdin，不 import 库来「模拟」用户 |

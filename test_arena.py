@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 import checks
 import confirm
@@ -562,6 +563,13 @@ class TestStep06ObservationPoints(Base):
         「意义被歪曲」→ 整份不写），所以它会把改判率长期压向 0 ——
         而 `observe.py` 的备注正好警告过「接近零不能读作 AI 很准」。
         要不要把结构边排除出去，是一次口径判断（`§T0.3`），不在这里自决。
+
+        **上限实测过**（DECLARATION §14.4）：一次真实提交产出 5 条机器边
+        （3 条 `contains` + 1 条 `causal_premise` + 1 条 `causal_conclusion`），
+        用户把**所有能拒的**都拒掉，比率是 `2/5 = 40%` —— 那就是天花板。
+        再往上只能拒 `contains`，而**产品表面没有这个动作**（`reject_edge()`
+        只有测试在用），所以从 `cli.py` 看分子恒为 0，而 `0/5` 和「AI 很准」
+        长得一模一样。
         """
         d = debate.open_debate(self.conn, question="Q", by="user:a")
         topic, c1 = _topic_and_first_claim(
@@ -1640,38 +1648,36 @@ class TestBrailleCanvas(unittest.TestCase):
 class TestColourPolicy(unittest.TestCase):
     """上不上色的判据。照 `NO_COLOR`（no-color.org）那条通行约定。
 
-    ⚠️ 这里**手写**替换 `sys.stdout` / `vote._parse`，不用 `unittest.mock`。
-    不是偏好问题：本目录有个 `concurrent.py`，它把标准库的 `concurrent` 包**遮住了**，
-    而 `unittest.mock` 会 `import asyncio` → `asyncio` 要 `concurrent.futures` →
-    拿到本目录那个文件 → `ModuleNotFoundError: No module named 'concurrent.futures'`。
-    见 DECLARATION §15（那条待你拍板的改名）。
+    这里用 `mock`，**不是手写替换** —— 但这是 2026-09-25 才改回来的：
+    在那之前本目录有个 `concurrent.py`，把标准库的 `concurrent` 包**遮住了**，
+    `from unittest import mock` 会一路炸到 `asyncio`（见 DECLARATION §15）。
+    改名之后 `mock` 恢复可用，这两处补丁就用回标准工具。
+
+    `mock.patch.dict(os.environ)` 不带参数 = **快照整个环境、退出时整体还原**，
+    所以里面怎么 pop / update 都不用自己写 try/finally。
     """
 
     class _TTY:
         def isatty(self):
             return True
 
-    def _with(self, tty, **env):
-        """在给定的环境变量 + tty 判定下，问一次「上不上色」。"""
-        saved_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
-        saved_out = sys.stdout
-        try:
-            for k in ("NO_COLOR", "FORCE_COLOR"):
-                os.environ.pop(k, None)
-            os.environ.update({k: v for k, v in env.items() if v is not None})
-            sys.stdout = self._TTY() if tty else self._NotATty()
-            return vote._colour_on(None)
-        finally:
-            sys.stdout = saved_out
-            for k, v in saved_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
-
     class _NotATty:
         def isatty(self):
             return False
+
+    def _with(self, tty, **env):
+        """在给定的环境变量 + tty 判定下，问一次「上不上色」。
+
+        `NO_COLOR=""`（空串）必须和「没设」区分开，所以先 pop 掉这两个键，
+        再按 `env` 里给的值填 —— 不能只在「有值」的时候 update。
+        """
+        with mock.patch.dict(os.environ):
+            for k in ("NO_COLOR", "FORCE_COLOR"):
+                os.environ.pop(k, None)
+            os.environ.update({k: v for k, v in env.items() if v is not None})
+            with mock.patch.object(sys, "stdout",
+                                   self._TTY() if tty else self._NotATty()):
+                return vote._colour_on(None)
 
     def test_explicit_argument_wins_over_everything(self):
         self.assertTrue(vote._colour_on(True))
@@ -1754,16 +1760,17 @@ class TestVoteChart(Base):
 
         真库里这一支几乎走不到（`created_at` 有微秒），但走到的时候必须说清楚 ——
         不说的话，一张竖直的线看起来像是「票数在瞬间暴涨」。
+
+        （2026-09-25 之前这里和 `TestColourPolicy` 一样是手写替换，因为本目录
+        当时有个 `concurrent.py` 遮住标准库的 `concurrent` 包，`mock` 用不了。
+        改名之后 `mock` 能用了 —— 单点函数替换就用它，一行，标准做法。
+        `TestColourPolicy` 那处仍然是手写：那边要动环境变量，`mock` 只覆盖一半。）
         """
         self._vote(self.a, "u1")
         self._vote(self.b, "u2")
         frozen = datetime(2026, 9, 25, tzinfo=timezone.utc)
-        saved = vote._parse
-        vote._parse = lambda ts: frozen
-        try:
+        with mock.patch.object(vote, "_parse", lambda ts: frozen):
             out = vote.chart(self.conn, self.topic, colour=False)
-        finally:
-            vote._parse = saved
         self.assertIn("退化成票序号", out)
         self.assertIn("不是时间", out)
 

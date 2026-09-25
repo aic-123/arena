@@ -195,7 +195,7 @@ class TestEveryCheckFires(unittest.TestCase):
         所以 B6 / B7 / B8 也在这条总账里 ——
         它们以前是 `main()` 里手工追加的，总账盖不到。
         """
-        # B8 扫 samples/*.md、B9 扫固定那一个 concurrent.py、B12 扫 confirm.py ——
+        # B8 扫 samples/*.md、B9 扫固定那一个 concurrency.py、B12 扫 confirm.py ——
         # 喂这个 .py 探针没用。它们的非空转各自单独钉住：
         # B8 在 TestB8Fires，B9 在 TestB9Fires，B12 在 TestB12Fires。
         needs_md_probe = {"B8", "B9", "B12", "B13"}
@@ -305,7 +305,21 @@ class TestB9Fires(unittest.TestCase):
             "conn.execute('UPDATE event SET actor = 1')\n"))
 
     def test_B9_accepts_the_real_apparatus(self):
-        """真装置必须是干净的，否则这条检查本身就是在骂自己。"""
+        """真装置必须是干净的，否则这条检查本身就是在骂自己。
+
+        ⚠️ 光断言 `== []` 是**不够**的：B9 在目标文件不存在时也返回 `[]`
+        （「还没写装置，这条暂不适用」），所以「装置干净」和「没有装置」
+        在这一句里长得一模一样 —— 用例会**空过**。
+        所以先单独钉住「B9 默认扫的那个文件真的在」。
+
+        2026-09-25 给装置改名（`concurrent.py` → `concurrency.py`）时踩到这个形状：
+        漏改 `checks.py` 里的路径，B9 从此再也不会响，而且**什么都不会说**。
+        """
+        self.assertTrue(
+            checks.APPARATUS.is_file(),
+            f"B9 默认扫的 {checks.APPARATUS} 不存在 —— 这条检查现在是空转的，"
+            "它打印的「过」没有任何含义。改了装置文件名就要同步改 `checks.APPARATUS`。",
+        )
         self.assertEqual(checks.check_apparatus_is_not_a_script(), [])
 
 

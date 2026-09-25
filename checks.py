@@ -303,6 +303,15 @@ _SQL_WRITE = re.compile(r"\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|REPL
                         re.I)
 _COORD = re.compile(r"\b(threading|multiprocessing|asyncio|Barrier|Semaphore)\b")
 
+# B9 默认扫的那一个文件。**提成常量**，因为它有一个「空转会静默」的坑：
+# `check_apparatus_is_not_a_script()` 在目标文件不存在时返回 `[]`（「暂不适用」），
+# 于是「装置是干净的」和「根本没有装置」长得一模一样 —— 而
+# `test_checks.py::test_B9_accepts_the_real_apparatus` 正好断言 `== []`，
+# 它会**空过**。2026-09-25 给装置改名时踩到这个形状：改 `concurrent.py` →
+# `concurrency.py` 而漏了这里，B9 就再也不会响了，而且什么都不会说。
+# 所以路径提成常量，好让用例能单独钉住「这个文件真的在」。
+APPARATUS = ROOT / "concurrency.py"
+
 
 def check_apparatus_is_not_a_script(
     target: Path | None = None,
@@ -321,7 +330,7 @@ def check_apparatus_is_not_a_script(
     `target` 可覆盖，只为了 `test_checks.py` 能拿临时探针验这条不是空转 ——
     跟 B8 一个道理：**只扫一个固定文件，跟扫一个改名就消失的标记，是同一种脆。**
     """
-    target = target or (ROOT / "concurrent.py")
+    target = target or APPARATUS
     if not target.is_file():
         return []                      # 还没写并发装置 —— 这条暂不适用，不是「过」
     hits = []

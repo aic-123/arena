@@ -17,9 +17,9 @@
 | `boundaries` 只折出 4/20；剩下 16 条**只有需求方能填** | §10.6 |
 | 缺口② 的「类型改判率」算得出来，但 `§C7.2` 没有这个观测点，**我没自己加** | §10.2 |
 | `add_evidence` 的默认 `kind="supports"` 是**无痕**的，和 ② 的口径不一致 | §10.5 |
-| `contains` 这类**结构边落进改判率分母**（用户没有「拒绝它」的动作，会把比率压向 0） | §14.4 |
+| 改判率的**口径**：`contains` 这类**用户拒不了的结构边**要不要算进分母（实测天花板 40%） | §14.4 |
+| **「拒绝一条边」没接到产品上** —— 从 `cli.py` 看分子恒为 0，而 `0/5` 与「AI 很准」长得一样 | §14.4 §14.6 |
 | 「一份原文一个 Topic」**是不是硬约定** —— 定不了它，`view()` 该扫几段原文就定不了 | §12.3 §14.6 |
-| **`concurrent.py` 要不要改名**（它把标准库的 `concurrent` 包遮住了，同目录下 `import asyncio` 会炸） | §15 |
 
 **已定、不再是未决的**（2026-09-25 需求方定，本文件当天改）：
 
@@ -31,6 +31,7 @@
 | B8 被腾空算不算风险 | **不算** —— B8 没坏，是那半条约束按你的指示暂停了 | §11 |
 | 两条写路径要不要统一 | **统一到 confirm 路**：`add_position` **删除**，`open_debate` 不再自带 Topic。写内容只剩 `propose → confirm → open_topic/add_to_topic` | §14 |
 | 票数怎么给人看 | **终端 Braille 文本图**（零依赖）：一张图一个 `question_version`、只画当前层级、`derived_from` 派生的子论点**另开一张**、多条曲线叠一张靠 ANSI 颜色区分 | §16 |
+| 并发装置要不要改名（原名把标准库的 `concurrent` 包遮住了） | **改名**：`concurrent.py` → **`concurrency.py`**。顺带发现 B9 有个「目标文件不存在就静默空转」的口子，一并钉住 | §15 |
 
 ---
 
@@ -41,7 +42,7 @@
 | 位置 | 新建 `arena/`，**不改动任何现有文件** | 本目录 |
 | 语言 | Python 3（3.14.1 实测），仅标准库 | — |
 | 存储 | SQLite 单文件（stdlib `sqlite3`，3.50.4） | `scaffold.py` |
-| 进程形态 | **多进程**：N 个独立 Python 进程，各自一个 SQLite 连接 | `concurrent.py` |
+| 进程形态 | **多进程**：N 个独立 Python 进程，各自一个 SQLite 连接 | `concurrency.py` |
 | 前端 | **没有前端**，也**没有 http.server** —— 见下方「§1 的两处落空」 | — |
 | 语义分割 | **确定性规则分割器**（纯函数 + 两个版本常量），非网络模型 | `segment.py` |
 | 锁策略 | **不引入任何锁** | 全仓 |
@@ -258,7 +259,7 @@ if v >= 0.2:               # 第 2 行 —— 老 B6 完全没反应
 
 它们没法并进 B1 那个全仓正则 —— `scaffold.py` 里满是 SQL 才是对的，
 它本来就是存储层。全仓扫会把它扫成误报，误报到最后就是关掉这条检查。
-所以 B9 只扫**一个文件**：`concurrent.py`。
+所以 B9 只扫**一个文件**：`concurrency.py`。
 
 为什么值得单配一条：本阶段最省事的作弊方式就是
 **在并发装置里塞一个 `sleep` 把竞争窗口撑开**。
@@ -273,7 +274,7 @@ if v >= 0.2:               # 第 2 行 —— 老 B6 完全没反应
 
 **第一次跑起来，它就抓到了我自己。** 第 10 步的装置要回答
 「这两个主体到底有没有真重叠」，而回答它必须读 `event` 表 ——
-第一版 B9 把 `SELECT` 也列为禁品，于是它在 `concurrent.py:216` 上报了一处命中。
+第一版 B9 把 `SELECT` 也列为禁品，于是它在 `concurrency.py:216` 上报了一处命中。
 
 **怎么处理的，以及为什么不是「放宽检查让它过」**：
 
@@ -594,13 +595,13 @@ if v >= 0.2:               # 第 2 行 —— 老 B6 完全没反应
 `§T2` 明说第 10/11 步是**核心交付，不是可选项**，且第 11 步的交付形式是
 **现象 / 复现步骤 / 根因**，三者缺一不算完成。下面是三段。
 
-装置见 `concurrent.py`。它遵守 `§C11.2`：两个**操作系统进程**、各自一个连接、
+装置见 `concurrency.py`。它遵守 `§C11.2`：两个**操作系统进程**、各自一个连接、
 **无任何同步原语**、只调产品 API、**没有一处 `sleep`**（B9 盯着）。
 
 ### 8.1 现象
 
 ```
-python concurrent.py run 4 6
+python concurrency.py run 4 6
   动作 190 次，其中异常 3 次
   事件 405 条，换手 23 次，最长连续段 65 条
   交错轮廓：甲乙甲丁丙甲丁丙丁丙甲丁甲乙丙丁甲乙丙丁乙丙丁乙
@@ -615,7 +616,7 @@ python concurrent.py run 4 6
 ### 8.2 复现步骤
 
 ```
-python concurrent.py run 4 6      # 4 个进程 × 6 轮，同一份 SQLite 文件
+python concurrency.py run 4 6      # 4 个进程 × 6 轮，同一份 SQLite 文件
 ```
 
 留档的库：`%TEMP%\arena-concurrent-*\arena.db`
@@ -1113,7 +1114,7 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 > **但这个形状还在**：`add_to_topic()` 照样能把第二段原文的命题挂进一个已有 Topic，
 > 而那个 Topic 的 `raw_text` 只认第一段。产品表面（`cli.py`）不走它 ——
 > 它每次提交都新开一个 Topic，所以**这条缝在产品上不存在**；
-> 走它的是 `concurrent.py` 的 `setup()`（第二份初始立场）。
+> 走它的是 `concurrency.py` 的 `setup()`（第二份初始立场）。
 > 见 §14.6。
 
 没有顺手改 `view()`：它要扫几段原文、`hints.scan()` 对多段输入返回什么，
@@ -1145,7 +1146,7 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 这一节只关掉缺口 2。当时另外三个**仍然开着**：
 
 1. **没有入口点。** `grep` `input(` / `argparse` / `sys.argv` 无结果；
-   `__main__` 只出现在 `checks.py`、`concurrent.py`、两个测试文件里。
+   `__main__` 只出现在 `checks.py`、`concurrency.py`、两个测试文件里。
    用户要写 Python 才能用。**这比「前端没做」更严重：根本没有产品表面。**
    → **已关**，见 §13。
 2. **`view()` 拿到错 id 不报错。** `open_topic()` 那一处加了检查，
@@ -1168,7 +1169,7 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 ### 13.1 缺口 1 是什么（实测）
 
 `grep` `input(` / `argparse` / `sys.argv` → 无结果；`__main__` 只出现在
-`checks.py`、`concurrent.py`、两个测试文件里。**用户要写 Python 才能用这个系统。**
+`checks.py`、`concurrency.py`、两个测试文件里。**用户要写 Python 才能用这个系统。**
 
 **这比「前端没做」严重。** 「前端没做」指的是有一个能跑的后台、缺一层界面；
 而当时的状态是**根本没有产品表面** —— 所有动作都只能由 `import confirm` 的脚本调用。
@@ -1288,7 +1289,7 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 | `checks.py` | B1–B13 全过，退出码 0 —— **`cli.py` 与 `test_cli.py` 都在扫描范围内，没有用豁免把命中压下去**（§4.1 修订五的规则） |
 | `samples/test_align.py` | 14 例全过 |
 | `samples/align.py`（标记判据自检） | 20 条共 3 处「原文未出现」标记，**全部符合判据**；注入两种错（不该标却标了 / 该标没标）都报得出来 —— 不是空转 |
-| `concurrent.py run 4 6` | 192 次动作 0 异常 —— **本轮未暴露**，不等于并发安全。⚠️ 192 这个数是 §14 之前的：当时 worker 里还有「直接提交一个立场」那一步。删掉它之后同一条命令是 **168 次**（§14.5） |
+| `concurrency.py run 4 6` | 192 次动作 0 异常 —— **本轮未暴露**，不等于并发安全。⚠️ 192 这个数是 §14 之前的：当时 worker 里还有「直接提交一个立场」那一步。删掉它之后同一条命令是 **168 次**（§14.5） |
 
 **这张表只记「例数 + 退出码」，不记秒数。** 秒数随机器变 —— 同一份测试换个环境可以差一个数量级，
 **而不可复现的数不能和可复现的数并排摆在同一列里**：后者能当判据，前者只能当环境注记。
@@ -1363,7 +1364,7 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 | 调用方 | 情况 |
 |---|---|
 | `cli.py` | **从来没用过它**。`cmd_submit` / `cmd_confirm` 早就走 `propose` → `open_topic` |
-| `concurrent.py` | 用了（`worker()` 里「直接提交一个立场」那一步 + `setup()` 的第二份） |
+| `concurrency.py` | 用了（`worker()` 里「直接提交一个立场」那一步 + `setup()` 的第二份） |
 | `test_arena.py` | 用了 13 处 |
 
 所以「统一」**不是重写 CLI** —— CLI 早就是对的。是**把那条与产品脱节的路径删掉，
@@ -1376,7 +1377,7 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 | `debate.py` | `add_position()` **删除**，换成 `add_to_topic()` —— 和 `open_topic()` 是同一条路的两个出口（新 Topic / 已有 Topic），两者都落到 `confirm.confirm()` |
 | `debate.py` | `open_debate()` 改成**只建 Debate 容器，不自带 Topic**。它原来顺手建一个 `{text: question, raw_text: question}` 的 Topic —— 那**也是第二条写路径**：不分割、同一个调用里自我 `activate()`、只存两个字段 |
 | `cli.py` | `cmd_new` 不再打印 `topic`，改说「它**不带 Topic** —— 题目只是这个容器的标题」 |
-| `concurrent.py` | worker 里删掉「直接提交一个立场」那一步；`setup()` 的第二份改用 `add_to_topic` 挂进第一个 Topic |
+| `concurrency.py` | worker 里删掉「直接提交一个立场」那一步；`setup()` 的第二份改用 `add_to_topic` 挂进第一个 Topic |
 | `test_arena.py` | 13 处调用点全部迁到 `_confirmed()` / `_one_claim()` / `_topic_and_first_claim()` —— 三个 helper 都走真路 |
 | `test_cli.py` | 1 处：原来靠 `new` 白送一个 Topic 号，现在那个号得靠确认一段别的原文挣出来 |
 
@@ -1387,24 +1388,77 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 
 ### 14.4 这一改**逼出了两个真问题**，都不是我安排的
 
-**(a) `contains` 结构边落进了改判率的分母。**
+#### (a) 改判率的分母里混着「用户没法拒绝的边」——**说清楚它到底错在哪**
 
-`test_overrule_counts_machine_edges_only` 原来断言分母恰好是 1。走真路之后它变成 3 ——
-因为 `confirm()` 写进来的 `contains`（Topic → Claim）**也是机器产的**
-（`origin=machine:segmenter/…`）。
+先把这个量本身摆出来（`observe.py` 的 `overrule` 观测点）：
 
-**这是旧写法看不见的事，不是新引入的**：任何人走真路提交，那些边就一直在。
-旧用例走 `add_position`，一条边都不建，才恰好是 1。
+```
+改判率 = 被用户拒绝的、机器产出的边数        （分子）
+       ────────────────────────────────
+              机器产出的边总数              （分母）
+```
 
-它值得记下来，是因为它会把改判率**长期压向 0**：`contains` 是结构边，
-用户没有「拒绝它」这个动作（`§C5` 给的是「意义被歪曲」→ 整份不写）。
-而 `observe.py` 的备注正好警告过「长期接近零**不能**读作『AI 很准』」。
+`§C2.4` 拿它回答一个问题：**「AI 做的结构化，可信吗」**。
+它的用法是「抽样审计 + 计改判率」—— 所以分子**必须**是「用户看过、并且说不」的那些边。
+**用户没法拒绝的边，放进分母就是把「他拒绝不了」算成了「他没拒绝」。**
 
-**要不要把结构边排除出去，是一次口径判断（`§T0.3`），我没有自决。**
-用例改成**从库里数**，并把这件事写进它的 docstring —— 所以这条不再是未决的隐患，
-而是一条写着名字的未决项（见 §14.6）。
+**实测一次真实提交**（`「现在的工作强度太大了，所以大家都不愿意往上爬。」`，
+真路：`propose` → 逐条确认 → `open_topic`），机器产出的边一共 5 条：
 
-**(b) 一条非机器边是 `open_topic()` 自己建的。**
+| 边 | 条数 | 它说的是什么 | 用户能拒绝吗 |
+|---|---|---|---|
+| `contains`（Topic → Claim） | **3** | 「这条命题属于这个议题」 | ❌ **没有这个动作** |
+| `causal_premise` | 1 | 「这一端是那件事的原因」 | ✅ 有（`debate.reject_edge()`） |
+| `causal_conclusion` | 1 | 「这一端是那件事的结果」 | ✅ 有 |
+
+（另有 1 条**人**产的 `contains`（Debate → Topic），不在分母里 —— 见下面 (b)。）
+
+**为什么 `contains` 不该在分母里**，三条理由，任何一条单独成立就够了：
+
+1. **它不是判断，是确认的结构性后果。** 一条命题进了这个议题，就必然有这条边。
+   它没有「说对了 / 说错了」这个维度 —— 拒掉它等于说「这条命题不属于这个议题」，
+   而模型里没有这个状态。
+2. **没有任何用户动作能拒它。** `§C5` 给用户的唯一闸门是「意义被歪曲？」，
+   而那个动作**整份不写**（`contains` 边根本不会存在）。它不是「用户拒了但没记下来」，
+   是**连拒的机会都没有**。
+3. **它按命题数线性增长**，而分子只能动在语义边上。
+   于是**用得越多，这个比率越被机械地压向 0** —— 而 `observe.py` 自己的备注正好警告：
+   「长期接近零**不能**读作『AI 很准』」。**两个方向一起坏**：真出问题时它动不了多少，
+   没出问题时它也动不了多少。
+
+**把上限算出来**（实测，不是推的）：用户把**所有能拒的**都拒掉之后，
+这个比率是 `2/5 = 40%` —— **40% 就是那份提交的天花板**。
+再往上走只能靠拒 `contains`，而 `reject_edge()` 技术上**拒得掉**
+（它不区分 `kind`，实测拒一条之后是 `3/5 = 60%`）—— **但产品表面（`cli.py`）
+没有这个动作，没人能点它。**
+
+**⚠️ 还有一个比口径更硬的事实，顺手量到了：**
+
+> **今天从产品表面看，分子**结构性地**永远是 0。**
+> `debate.reject_edge()` 存在，但 `cli.py` 里**没有一条命令**调它
+> （`grep reject_edge` → 只有测试在用）。所以 `observe` 打印的永远是 `0/5`，
+> 而 **`0/5` 和「AI 很准」长得一模一样** ——
+> 这正是 §14 刚给「换说法率」修掉的那个病（没有产生分子的动作，
+> 显示出来的却是一个正常读数的比率）。
+
+**所以这件事有两层，别混在一起：**
+
+| 层 | 是什么 | 谁来定 |
+|---|---|---|
+| **口径层** | 就算有了完整的复核界面，`contains` 该不该在分母里 | **`§T0.3`，你定**（我没有自决） |
+| **接通层** | 「拒绝一条边」这个动作**现在压根没接到产品上**，所以分子恒为 0 | 要做就得先定「边怎么呈现给人看」——那是产品判断，同 §13.5「投票页」那件事 |
+
+**顺带说清一个容易混的名字**：这里的「改判率」是 **边的拒绝率**（`relation.state`）。
+它**不是** §10.2 那个「类型改判率」—— 后者由 `types_defaulted` /
+`types_resolved` 两个事件算（`resolve_types()` 只改「用哪个类型」，**一条边都不拒**，
+所以它对这个比率毫无影响）。那个量 `§C7.2` 里**没有观测点**，我当时没有自己加（§10.2）。
+
+**现状**：`test_overrule_counts_machine_edges_only` 改成**从库里数**
+（`SELECT COUNT(*) … origin LIKE 'machine:%'`），断言 `分子 == 1`、
+`分母 == machines`、`值 ≈ 1/machines`，并把上面这件事写进它的 docstring ——
+所以这条不再是**未决的隐患**，而是一条**写着名字的未决项**（§14.6）。
+
+#### (b) 一条非机器边是 `open_topic()` 自己建的
 
 `open_topic()` 建的 `debate → topic` 边，`origin` 是**提交人**（`user:a`），
 不是 `machine:`。这是对的（谁把这段原文提进这个讨论，是一个人的动作），
@@ -1420,8 +1474,8 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 | `test_checks.py` | 25 例全过 |
 | `samples/test_align.py` | 14 例全过 |
 | `checks.py` | B1–B13 全过，退出码 0 |
-| `concurrent.py run 4 6` | **168 次动作 0 异常**，换手 22 次、最长连续段 81/345 —— **本轮未暴露**，不等于并发安全 |
-| `grep add_position` | 产物代码里 **0 处调用**；只在 `debate.py` / `concurrent.py` / `test_arena.py` 的**注释里**作为历史提到 |
+| `concurrency.py run 4 6` | **168 次动作 0 异常**，换手 22 次、最长连续段 81/345 —— **本轮未暴露**，不等于并发安全 |
+| `grep add_position` | 产物代码里 **0 处调用**；只在 `debate.py` / `concurrency.py` / `test_arena.py` 的**注释里**作为历史提到 |
 
 写路径只剩一条：`confirm.propose()` → `confirm.confirm(reviewed=[…])` →
 `open_topic()` / `add_to_topic()`。**Topic 因此只可能由一次逐条确认产生**，
@@ -1441,19 +1495,27 @@ raw = original_content_of(conn, t["id"]).get("raw_text", "")   # debate.py
 
 产品表面（`cli.py`）**不走它** —— 它每次提交都新开一个 Topic，
 所以一个 Topic 只有一段原文，这条缝在产品上不存在。
-走它的是 `concurrent.py` 的 `setup()`（第二份初始立场）。
+走它的是 `concurrency.py` 的 `setup()`（第二份初始立场）。
 
 **「一份原文一个 Topic 是不是硬约定」还是开着的问题**（§12.3）——
 定不了它，`view()` 该扫几段原文就定不了，所以这里没动 `view()`。
 
+**另外两件这一改逼出来的、也没关掉的**（都在 §14.4）：
+
+1. **改判率的分母里混着 `contains` 这类用户拒不了的边** —— 上限被压住
+   （实测一次提交的天花板是 40%）。**是口径问题（`§T0.3`），我没有自决。**
+2. **「拒绝一条边」这个动作压根没接到产品上** —— `debate.reject_edge()` 只有测试在用，
+   所以从 `cli.py` 看分子**恒为 0**，而 `0/5` 和「AI 很准」长得一模一样。
+   **这一条不是口径问题，是没接通**；要接通得先定「边怎么呈现给人看」。
+
 ---
 
-## 15. 本目录的 `concurrent.py` 把标准库的 `concurrent` 包遮住了（**未决，等你拍板**）
+## 15. 并发装置改名：`concurrent.py` → `concurrency.py`（**已定**，2026-09-25 拍板）
 
-这一节记的是一个**现在没有影响、但埋在那里**的东西。发现它是因为
-`test_arena.py` 里要写 `from unittest import mock`，一写就炸。
+发现它的起因很偏：`test_arena.py` 里要写 `from unittest import mock`，一写就炸。
+查下去发现是本目录的一个文件名把标准库**遮住了**。
 
-### 15.1 实测
+### 15.1 现象（实测）
 
 ```
 $ cd arena && python -c "from unittest import mock"
@@ -1475,36 +1537,118 @@ C:\...\arena\concurrent.py
 所以 `arena/concurrent.py` 先被拿到，而它是个模块、不是包 —— 于是
 `concurrent.futures` 这一支取不到。
 
-**这个目录下任何 `import asyncio` 的代码都会炸**，不只是测试。
-标准库里的 `asyncio`、`concurrent.futures`、`unittest.mock`，
-以及任何依赖它们的第三方库（`aiohttp`、`httpx`、`anyio`……）全在内。
+**这个目录下任何 `import asyncio` 的代码都会炸**，不只是测试：
+标准库的 `asyncio` / `concurrent.futures` / `unittest.mock`，
+以及任何依赖它们的第三方库（`aiohttp` / `httpx` / `anyio`……）全在内。
+**报错里全是 `asyncio`，和真正的原因（一个文件名）毫无关系** —— 这是它值得单独记一条的理由。
 
-### 15.2 为什么现在没有影响
+### 15.2 当时为什么没红
 
 - 产物代码（`scaffold` / `debate` / `confirm` / `segment` / `vote` / `hints` /
   `observe` / `cli`）**一处都没 import 过它们**（B7 一直在证明第三方依赖为零）。
-- 需要替换的地方**只有测试**，而那里已经改成**手写替换**（`sys.stdout`、
-  `vote._parse`），不用 `unittest.mock` 了 —— 见
-  `test_arena.py::TestColourPolicy` 的 docstring。
+- 只有测试需要替换 `sys.stdout` / `vote._parse`，而那里当时改成了**手写替换**绕开。
 
-所以这是一个**潜伏**项：眼下不红，但下一个想在这个目录下写 `asyncio` 的人
+所以它是一个**潜伏**项：眼下不红，下一个想在这个目录下写 `asyncio` 的人
 会撞上一个看起来和 `asyncio` 毫无关系的报错。
 
-### 15.3 三个选项和各自的代价
+### 15.3 拍板：改名（不是挪走）
 
-| 选项 | 代价 | 影响面 |
-|---|---|---|
-| **甲：改名**（`concurrency.py` / `harness.py` / `stress.py`） | 要动 `checks.py:324` 的 B9 目标路径、`concurrent.py` 自己两处用法提示、README 三处 | **1 处代码 + 5 处文档**；DECLARATION 里那些历史叙述**不改**（那是当时的事实），只在 §15 加一条 |
-| **乙：挪进 `samples/`**（那里已经是「非产品表面」的住处） | 同甲，且要连带改 `samples/test_align.py` 的路径假设 | 甲 + 多一点；好处是顺带把它从「产品文件」那一栏挪出去 —— 它本来就**不是**产品，是 `§T2` 第 10 步的装置 |
-| **丙：不改，就这样** | 零改动 | 上面那条潜伏项留着；下一个人得自己再发现一次 |
+三个选项当时摆在桌上：
 
-**我没有自决。** 这不是「改动大不大」的问题，是**改的是名字，而名字是你定的**：
-`concurrent.py` 出现在 `§T2` 第 10 步、B9 的目标、README 的文件表里，
-它已经是一个被文档指着的名字。猜的代价高于问（`§T5`），所以停在这里。
+| 选项 | 代价 |
+|---|---|
+| **甲：改名** | 动 `checks.py` 的 B9 目标路径、装置自己两处用法提示、README 四处 |
+| 乙：挪进 `samples/`（那里已经是「非产品表面」的住处） | 同甲，且要连带改 `samples/test_align.py` 的路径假设 |
+| 丙：不改 | 潜伏项留着，下一个人自己再发现一次 |
 
-**顺带说清楚：这不是 `§T5` 那个「新依赖阻断项」本身。** 改名不引依赖，
-B7（第三方依赖为零）不受影响。借用的只是 `§T5` 那条「拿不准就问、别猜」的规矩
-（本文件 §10.2、§13.5 也是这么用的）。
+**需求方 2026-09-25 定：甲，改名为 `concurrency.py`。**
+选 `concurrency` 而不是 `harness` / `stress`：原名字里「并发」这个信息要留住
+（`§T2` 第 10 步、B9 的目标、README 的文件表都靠它认），而 `stress` 会把它
+读成压力测试、`harness` 什么信息都不带。新名字**不撞任何可导入的模块**（实测
+`importlib.util.find_spec` 三个候选全为 `None`）。
+
+**这不是 `§T5` 那个「新依赖阻断项」本身** —— 改名不引依赖，B7 不受影响。
+当时借用的是 `§T5` 那条「拿不准就问、别猜」的规矩（本文件 §10.2、§13.5 也这么用）。
+改名之后 `from unittest import mock` 恢复正常（实测 ok）。
+
+### 15.4 ⚠️ 改名顺手挖出来的第二个洞：B9 有一个「文件不存在 = 静默空转」的口子
+
+**这个洞比改名本身重要。**
+
+`checks.py` 的 B9 只扫**一个固定文件**：
+
+```python
+target = target or (ROOT / "concurrent.py")
+if not target.is_file():
+    return []                      # 还没写并发装置 —— 这条暂不适用，不是「过」
+```
+
+而 `test_checks.py` 里那条「真装置必须是干净的」正好断言：
+
+```python
+self.assertEqual(checks.check_apparatus_is_not_a_script(), [])
+```
+
+**`return []` 和「扫过、没问题」返回的是同一个值。** 所以：
+
+> 如果改名时改了 `concurrent.py` 而漏改 `checks.py` 里那行路径，
+> **B9 从此再也不会响，而且什么都不会说** —— 它继续打印「过」，
+> 而那句「过」的含义是「文件不存在」。
+
+这条用例也会**照常通过**（`[] == []`）。**这就是本仓库反复在防的那种病：
+「检查失效」和「检查通过」长得一模一样**（§4.2 的 B8 是靠标记触发、标记一改名就空转，
+是同一个形状）。
+
+**修法**（两处，都很小）：
+
+| 改哪 | 改成什么 |
+|---|---|
+| `checks.py` | 路径提成模块级常量 `APPARATUS = ROOT / "concurrency.py"`，`target = target or APPARATUS` |
+| `test_checks.py` | 那条用例**先断言 `checks.APPARATUS.is_file()`**，再断言 `== []` —— 否则它分不出「装置干净」和「没有装置」 |
+
+**一般化的判据**（记下来，下次加「只对某个文件成立」的检查时直接用）：
+
+> 一条检查的**适用范围**如果是靠「某个文件在不在」来决定的，
+> 那「范围不成立」就**不能**返回和「范围内没违规」一样的值。
+> 要么单独钉住那个文件存在，要么返回一个明显不同的东西（比如 `None` / 抛异常）。
+
+### 15.5 改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `concurrent.py` → `concurrency.py` | `git mv`（git 认得出是重命名，历史不断） |
+| `concurrency.py` | docstring 里加改名说明；`run` 的用法提示改成新名字 |
+| `checks.py` | 新增 `APPARATUS` 常量，B9 用它当默认目标 |
+| `test_checks.py` | 「真装置」那条用例先钉住文件存在；一处注释跟着改 |
+| `test_arena.py` | 两处手写替换**都改回 `mock`**（障碍没了就该收回去）；`TestColourPolicy` docstring 改写（**旧理由已不成立，不能留着**）；`test_overrule_…` docstring 补上限实测；重新加回 `from unittest import mock` |
+| `README.md` | 四处文件名；「未决」那段改成「已定」并补上 15.4 这个洞 |
+
+**只改了模块名，没改运行时产物名**：`arena-concurrent.db` /
+`%TEMP%\arena-concurrent-*` 保持原样 —— §8.2 记着那个留档路径，
+改了就把当时那个现场说岔了。
+
+**测试里那两处手写替换一并改回 `mock` 了。** 当初手写纯粹是因为 `mock` 用不了
+（不是偏好），所以障碍一没就该收回去 —— 留着会变成「理由已经消失的变通」，
+下一个人读到时候只会更糊涂。`TestColourPolicy._with()` 用
+`mock.patch.dict(os.environ)`（不带参数 = 快照整个环境、退出整体还原）
++ `mock.patch.object(sys, "stdout", …)`，比原来的 try/finally 还短。
+
+### 15.6 本文档里旧名字怎么处理的（**改了哪些、没改哪些**）
+
+**§1–§14 里凡是提到装置文件的地方，都跟着改成了 `concurrency.py`**（16 行）。
+那些句子是**指向现在这个文件的指针** —— 「装置见 X」「B9 只扫一个文件：X」
+「进程形态 → X」—— 留着旧名字会把人带到「文件不存在」上。
+
+**没有动的三类**：
+
+| 没动什么 | 为什么 |
+|---|---|
+| **数字与结论**（192 次 / 168 次 / 换手 22 次 / `concurrency.py:216` 那个**行号**……） | 那是当时的事实。改数字就是篡改记录 |
+| **§15.1 的报错实录**（`import concurrent.futures`、`C:\...\arena\concurrent.py`） | 那是**改名之前**的原文，正是这一节的证据 |
+| **运行时产物名**（`arena-concurrent.db` / `%TEMP%\arena-concurrent-*`） | §8.2 记着那个留档路径，改了就把当时那个现场说岔了 |
+
+**一句话**：看到 `concurrent` 想跑一下 → 换成 `concurrency`；
+看到**数字**和**行号** → 那些没变（行号指的是当年那一版的文件）。
 
 ---
 
