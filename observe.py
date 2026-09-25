@@ -34,6 +34,23 @@
 而在这个系统里，「还没开始记」是常态 —— 分类没做、样本没标、边还没建。
 把两者混起来，等于给自己造一份**看起来很正常的空数据**。
 `_ratio()` 因此对分母为 0 一律返回 `None`。
+
+--- 同一个错的第二种形态：分子产不出来 ---------------------------------------
+
+2026-09-25 又撞见一次，换了个地方：**改判率的分子在产品里根本没有动作能产生它。**
+
+`overruled = 0` 看着像「没人拒绝」，实际是「**没人能拒**」——
+`cli.py` 里没有「拒绝一条边」这个动作（`debate.reject_edge()` 只有测试在用）。
+于是 `0 / 2` 是一个**看起来很正常的读数**，而它的含义是「这个量测不了」。
+
+所以「算不出」有**两个**来源，都要能显示出来，且**不许都渲染成 0**：
+
+| 来源 | 含义 |
+|---|---|
+| 分母为 0 | 还没开始记 |
+| **分子产不出** | **没有任何动作能产生它** —— 那个 0 不是「零」，是「测不了」 |
+
+判据（本模块一律照此办理）：**一个数如果它的「0」和「没有」分不开，就不许印成 0。**
 """
 
 from __future__ import annotations
@@ -85,11 +102,19 @@ OBSERVATION_POINTS = (
         "layer": "结构层",
         "clause": "§C2.4",
         "answers": "AI 结构化是否可信",
-        "numerator": "被用户拒绝的、机器产出的边数",
-        "denominator": "机器产出的边总数",
-        "facts": "relation 表里 origin 以 machine: 开头的行，按 state 分",
+        "numerator": "被用户拒绝的、机器产出的**判断边**数",
+        "denominator": "机器产出的**判断边**总数",
+        "facts": "relation 表里 origin 以 machine: 开头、且 kind 不在 STRUCTURE_KINDS 的行，按 state 分",
         "caveat": "双向歧义：长期偏高说明结构化不可用；长期接近零**不能**读作"
-                  "「AI 很准」——也可能是根本没人在看。两个方向都要人工抽检。",
+                  "「AI 很准」——也可能是根本没人在看。两个方向都要人工抽检。"
+                  "**结构边（`contains`）不进这个分母**（2026-09-25 定）："
+                  "「这条命题属于这个议题」不是判断，也没有用户动作能拒它，"
+                  "算进去就是把「用户拒不了」算成「用户没拒绝」，"
+                  "而且它按命题数线性增长，会把比率机械地压向 0。"
+                  "⚠️ 排除之后的后果要看清：**机器产的判断边现在只有一对因果边**"
+                  "（`causal_premise` / `causal_conclusion`），所以这个量**只在含因果命题的"
+                  "提交上存在**；一句普通陈述（「远程办公的效率比坐办公室高。」）"
+                  "一条判断边都不产生，分母是 0 → 显示「算不出」。",
     },
     {
         "id": "self_edit",
@@ -147,6 +172,42 @@ def _parse(ts: str) -> datetime:
     return datetime.strptime(ts, TS_FORMAT).replace(tzinfo=timezone.utc)
 
 
+# 改判率的分母**只算「判断边」**，不算「结构边」。
+#
+# 结构边 = **归属关系**（`contains`：「这条命题属于这个议题」）。
+# 它不是判断：一条命题进了这个议题就必然有这条边，它没有「说对了 / 说错了」
+# 这个维度；也没有任何用户动作能拒它 —— `§C5` 给用户的唯一闸门是
+# 「意义被歪曲？」，而那个动作**整份不写**，边根本不会存在。
+# 把它算进分母 = 把「用户拒不了」算成「用户没拒绝」。
+#
+# 而且它**按命题数线性增长**：一次提交有 N 条命题就多 N 条 contains，
+# 而分子只能动在判断边上 —— 所以用得越多，比率越被机械地压向 0。
+# 实测（DECLARATION §14.4）：一次真实提交产出 5 条机器边，其中 **3 条是 contains**；
+# 用户把所有能拒的都拒掉，比率也只有 `2/5 = 40%`。排除之后同一例子是
+# `2/2 = 100%` —— 那才反映了「他确实把能拒的都拒了」。
+#
+# ⚠️ **分子必须用同一个判据**（同样的 `NOT IN`）。只改分母的话，
+# 「拒掉一条 contains」会让分子落在分母外面，比率能超过 1。
+STRUCTURE_KINDS = ("contains",)
+
+# 改判率的**分子能不能被产生出来** —— 这是**产品表面的事实**，不是数据的事实。
+#
+# 现在 `cli.py` 里没有「拒绝一条边」这个动作（`debate.reject_edge()` 只有测试在用），
+# 所以分子恒为 0。而这个 0 的含义是「**没人能拒**」，不是「没人拒绝」——
+# 两者在读数上分不开，所以这时这个比率**算不出**，不是零。
+#
+# 需求方 2026-09-25 定：**不做那个界面**。所以这个量会长期处于这个状态，
+# 那就更要说清楚 —— 一个恒为 0 的分子印成一个正常的 `0.0000`，
+# 就是模块开头警告的那种「看起来很正常的空数据」。
+#
+# ⚠️ **只在分子为 0 时才用这个判据**（见 `snapshot()`）：
+# 分子非 0 说明确实有人拒过（哪怕是通过库直接调的），那就是一个真读数，
+# 不该因为「产品上没有这个按钮」而被抹成算不出。
+#
+# 哪天接上了那个动作，把这里改成 True —— 那时 `0 / N` 本身就是真读数。
+REJECT_ACTION_EXISTS = False
+
+
 def _ratio(num: int, den: int):
     """分母为 0 → `None`（算不出），**不是** 0.0。理由见模块开头。"""
     return None if not den else num / den
@@ -193,8 +254,13 @@ def record_classified(
 # 派生视图（只读）
 # ---------------------------------------------------------------------------
 
-def _entry(point: dict, num: int, den: int) -> dict:
-    value = _ratio(num, den)
+def _entry(point: dict, num: int, den: int, *, unreachable: str = "") -> dict:
+    """`unreachable` 非空 = **分子在产品里产生不出来**（见 `REJECT_ACTION_EXISTS`）。
+
+    那时值一律是 `None`（算不出），因为那个 0 分不出「零」和「没有」。
+    这**不是**在说「分母为 0」—— 两个来源分开记，好让人看出是哪一种。
+    """
+    value = None if unreachable else _ratio(num, den)
     return {
         "id": point["id"],
         "观测点": point["name"],
@@ -207,6 +273,7 @@ def _entry(point: dict, num: int, den: int) -> dict:
         "分母": den,
         "值": value,
         "算得出": value is not None,
+        "分子产不出": unreachable,
         "备注": point["caveat"],
     }
 
@@ -230,13 +297,18 @@ def snapshot(conn: sqlite3.Connection) -> dict:
         missed += p["unused_char_count"]
         total += p["total_char_count"]
 
-    # ---- 改判率：机器产出的边 ----
+    # ---- 改判率：机器产出的**判断边**（结构边不进分母，见 STRUCTURE_KINDS）----
+    marks = ",".join("?" * len(STRUCTURE_KINDS))
     machine_edges = conn.execute(
-        "SELECT COUNT(*) AS n FROM relation WHERE origin LIKE 'machine:%'"
+        "SELECT COUNT(*) AS n FROM relation"
+        f" WHERE origin LIKE 'machine:%' AND kind NOT IN ({marks})",
+        STRUCTURE_KINDS,
     ).fetchone()["n"]
     overruled = conn.execute(
         "SELECT COUNT(*) AS n FROM relation"
-        " WHERE origin LIKE 'machine:%' AND state = 'rejected'"
+        f" WHERE origin LIKE 'machine:%' AND kind NOT IN ({marks})"
+        "   AND state = 'rejected'",
+        STRUCTURE_KINDS,
     ).fetchone()["n"]
 
     # ---- 自己命题的修改率：单位是 **draft** ----
@@ -263,7 +335,16 @@ def snapshot(conn: sqlite3.Connection) -> dict:
     out = {
         "rewording": _entry(by_id["rewording"], len(flagged), len({d["actor"] for d in drafts})),
         "unused": _entry(by_id["unused"], missed, total),
-        "overrule": _entry(by_id["overrule"], overruled, machine_edges),
+        # ⚠️ 只在**分子为 0** 时才把「分子产不出」这个判据挂上：
+        # 分子非 0 = 确实有人拒过（哪怕是直接调库），那是一个真读数，
+        # 不该因为「产品上没有这个按钮」被抹成算不出。
+        # 判据一句话：**这个 0 分不出「零」和「没有」的时候，才印算不出。**
+        "overrule": _entry(
+            by_id["overrule"], overruled, machine_edges,
+            unreachable=("" if (REJECT_ACTION_EXISTS or overruled) else
+                         "产品里没有「拒绝一条边」这个动作（`cli.py` 里没有命令调 "
+                         "`debate.reject_edge()`）—— 分子产生不出来，"
+                         "所以这个 0 的含义是「没人能拒」，不是「没人拒绝」")),
         "self_edit": _entry(by_id["self_edit"], self_edited, len(drafts)),
         "unrelated": _entry(by_id["unrelated"], bucket, classified),
         "confirm": _entry(by_id["confirm"], dropped, len(drafts)),
@@ -281,12 +362,24 @@ def render(conn: sqlite3.Connection) -> str:
         "观测点（§C7.2）—— 现在埋，阈值等数据",
         "",
         "⚠️ 下面所有的数**没有高低之分**。这里不说什么叫「高」，也不会有。",
-        "   分母为 0 的显示「算不出」—— 那是「还没开始记」，不是「比率是零」。",
+        "   「算不出」有**两个**来源，都会在行内写出来，不许混成一个笼统的「算不出」：",
+        "     · 分母为 0        —— 还没开始记，**不是**「比率是零」",
+        "     · 分子产生不出来  —— 产品里没有产生它的动作，**不是零，是测不了**",
         "",
     ]
     for pid in ("rewording", "unused", "overrule", "self_edit", "unrelated", "confirm"):
         e = snap[pid]
-        shown = "算不出" if not e["算得出"] else f"{e['值']:.4f}"
+        if e["算得出"]:
+            shown = f"{e['值']:.4f}"
+        else:
+            # 「算不出」有**两个**来源，都要说出来 —— 一个笼统的「算不出」
+            # 会让人以为只有一种原因（多半会猜成「还没开始记」）。
+            why = []
+            if not e["分母"]:
+                why.append("分母为 0（还没开始记）")
+            if e["分子产不出"]:
+                why.append(e["分子产不出"])
+            shown = "算不出 —— " + "；".join(why)
         lines += [
             f"── {e['观测点']}  [{e['层']}]  {e['条款']}",
             f"   它回答：{e['它回答']}",

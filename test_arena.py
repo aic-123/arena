@@ -547,29 +547,22 @@ class TestStep06ObservationPoints(Base):
         self.assertEqual(e["分母"], 1)
 
     def test_overrule_counts_machine_edges_only(self):
-        """`§C2.4`：改判率量的是**机器产出的边**被推翻的比例。用户自己建的边不算。
+        """`§C2.4`：改判率量的是**机器产出的判断边**被推翻的比例。用户自己建的边不算。
 
         ⚠️ 2026-09-25 走真路之后，这条用例露出了一件旧写法看不见的事：
         `confirm()` 写进来的 `contains`（Topic → Claim）**也是机器产的**
-        （`origin=machine:segmenter/…`），所以它们**落在分母里**。
+        （`origin=machine:segmenter/…`），所以它们当时**落在分母里**。
         旧写法走 `add_position`，一条边都不建，分母才恰好是 1。
         （非机器边有两条：`open_topic()` 建的 `debate → topic`，以及本用例
         自己建的那条 `contradicts`。所以下面不数「非机器边有几条」——
         那个数会随着写路径怎么建边而漂。）
 
-        所以下面不再写死那个数 —— 写死就会把「分母里都有什么」藏起来，
-        而那正是本条要盯的东西。**这件事本身是个待定的口径问题**：
-        `contains` 是结构边，用户没有「拒绝它」这个动作（`§C5` 给的是
-        「意义被歪曲」→ 整份不写），所以它会把改判率长期压向 0 ——
-        而 `observe.py` 的备注正好警告过「接近零不能读作 AI 很准」。
-        要不要把结构边排除出去，是一次口径判断（`§T0.3`），不在这里自决。
+        **2026-09-25 需求方定：`contains` 这类结构边排除出分母**（口径层）。
+        理由与实测见 DECLARATION §14.4：它不是判断、没有用户动作能拒它、
+        而且按命题数线性增长（实测天花板只有 40%）。
+        所以下面断言的分母**小于** `machines` —— 差值就是那几条结构边。
 
-        **上限实测过**（DECLARATION §14.4）：一次真实提交产出 5 条机器边
-        （3 条 `contains` + 1 条 `causal_premise` + 1 条 `causal_conclusion`），
-        用户把**所有能拒的**都拒掉，比率是 `2/5 = 40%` —— 那就是天花板。
-        再往上只能拒 `contains`，而**产品表面没有这个动作**（`reject_edge()`
-        只有测试在用），所以从 `cli.py` 看分子恒为 0，而 `0/5` 和「AI 很准」
-        长得一模一样。
+        本条**不再**说「这是待定的口径问题」：它已经定了。
         """
         d = debate.open_debate(self.conn, question="Q", by="user:a")
         topic, c1 = _topic_and_first_claim(
@@ -589,18 +582,95 @@ class TestStep06ObservationPoints(Base):
         machines = self.conn.execute(
             "SELECT COUNT(*) AS n FROM relation WHERE origin LIKE 'machine:%'"
         ).fetchone()["n"]
+        structure = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM relation"
+            " WHERE origin LIKE 'machine:%' AND kind IN ('contains')"
+        ).fetchone()["n"]
 
         e = observe.snapshot(self.conn)["overrule"]
-        self.assertEqual(e["分子"], 1)          # 只有机器那条进了分子
-        self.assertEqual(e["分母"], machines)   # 分母是机器边的**全部**
-        self.assertAlmostEqual(e["值"], 1 / machines)
+        self.assertEqual(e["分子"], 1)                       # 只有机器那条进了分子
+        self.assertEqual(e["分母"], machines - structure)    # 结构边不进分母
+        self.assertAlmostEqual(e["值"], 1 / (machines - structure))
         # 用户自己建的那条**被拒了、一边都不进** —— 这才是本用例的要点。
-        self.assertGreater(machines, 1, "结构边没进分母？那这条用例就没在测它")
+        self.assertGreater(structure, 0, "一条结构边都没有，那这条用例就没在测「排除」")
         self.assertGreater(total - machines, 0, "一条非机器边都没有，那也测不到「不算」")
         self.assertEqual(
             "rejected",
             self.conn.execute("SELECT state FROM relation WHERE id = ?",
                               (human,)).fetchone()["state"])
+
+    def test_overrule_says_it_cannot_be_computed_when_the_numerator_is_unreachable(self):
+        """**分子产不出来时不许印成 0.0000。**
+
+        2026-09-25 第二次撞见同一个病（第一次是分母为 0）：
+        `cli.py` 里没有「拒绝一条边」这个动作，所以分子恒为 0 ——
+        而这个 0 的含义是「**没人能拒**」，不是「没人拒绝」。
+        印成一个正常的 `0.0000`，就是 `observe.py` 开头警告的
+        「看起来很正常的空数据」。
+
+        判据：**这个 0 分不出「零」和「没有」的时候，才印算不出。**
+        所以本条同时钉两个方向 —— 分子为 0 时算不出，分子非 0 时是真读数。
+        """
+        d = debate.open_debate(self.conn, question="Q", by="user:a")
+        topic, c1 = _topic_and_first_claim(
+            self.conn, debate_id=d["debate"], text="P1", by="user:a")
+        c2 = _one_claim(self.conn, debate_id=d["debate"], text="P2", by="user:b",
+                        topic_id=topic)
+        m = scaffold.add_relation(
+            self.conn, kind="supports", from_id=c1, to_id=c2, origin="machine:seg-1")
+
+        # ① 有一条可拒的判断边，但一条都没被拒 → 算不出（不是 0）
+        e = observe.snapshot(self.conn)["overrule"]
+        self.assertEqual((e["分子"], e["分母"]), (0, 1))
+        self.assertIsNone(e["值"], "分子产不出来却给了一个值 —— 那个 0 会被读成「没人拒绝」")
+        self.assertFalse(e["算得出"])
+        self.assertIn("没人能拒", e["分子产不出"])
+        self.assertIn("算不出", observe.render(self.conn))
+
+        # ② 真拒掉一条之后 → 那是个真读数，不许再抹成算不出
+        scaffold.reject_relation(self.conn, m, by="user:b")
+        e = observe.snapshot(self.conn)["overrule"]
+        self.assertEqual((e["分子"], e["分母"]), (1, 1))
+        self.assertAlmostEqual(e["值"], 1.0)
+        self.assertEqual(e["分子产不出"], "")
+
+    def test_overrule_has_no_denominator_without_a_causal_sentence(self):
+        """排除结构边之后，一句普通陈述**一条判断边都不产生** → 分母 0 → 算不出。
+
+        这是那条口径决定的**真实后果**，必须钉住而不是含糊过去：
+        机器产的判断边现在只有一对因果边，所以这个量**只在含因果命题的提交上存在**。
+        如果哪天有人把 `causal_*` 之外的第二类判断边加进写路径，这条会红 ——
+        那时要重新想「这个量到底在量什么」。
+        """
+        d = debate.open_debate(self.conn, question="Q", by="user:a")
+        _topic_and_first_claim(self.conn, debate_id=d["debate"],
+                               text="远程办公的效率比坐办公室高。", by="user:a")
+        kinds = [r["kind"] for r in self.conn.execute(
+            "SELECT kind FROM relation WHERE origin LIKE 'machine:%'")]
+        self.assertEqual(kinds, ["contains"], f"判断边的种类变了：{kinds}")
+        e = observe.snapshot(self.conn)["overrule"]
+        self.assertEqual(e["分母"], 0)
+        self.assertIsNone(e["值"])
+
+    def test_overrule_excludes_only_structure_kinds(self):
+        """排除的是**结构边这个判据**，不是「contains 这个字符串」。
+
+        如果哪天有人把 `contains` 改名，或者把别的归属类边加进来，
+        `STRUCTURE_KINDS` 是唯一要改的地方 —— 这条用例盯着它别悄悄变。
+        """
+        self.assertEqual(observe.STRUCTURE_KINDS, ("contains",))
+        # 分子与分母必须用**同一个**判据，否则「拒掉一条结构边」会让分子
+        # 落在分母外面，比率能超过 1。
+        d = debate.open_debate(self.conn, question="Q", by="user:a")
+        topic, c1 = _topic_and_first_claim(
+            self.conn, debate_id=d["debate"], text="P1", by="user:a")
+        structure = self.conn.execute(
+            "SELECT id FROM relation WHERE origin LIKE 'machine:%'"
+            " AND kind = 'contains' LIMIT 1").fetchone()["id"]
+        debate.reject_edge(self.conn, structure, by="user:a")
+        e = observe.snapshot(self.conn)["overrule"]
+        self.assertEqual((e["分子"], e["分母"]), (0, 0),
+                         "拒掉一条结构边之后分子动了 —— 分子和分母的判据不一致")
 
     def test_unused_ratio_sums_counts_not_averages_ratios(self):
         """比值不能相加。分子分母**逐份累加**，不是把几个比值平均。"""
