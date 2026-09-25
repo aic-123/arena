@@ -1,0 +1,22 @@
+# 行尾一律 LF。
+#
+# 为什么需要这个文件：机器级的 `core.autocrlf = true`（PortableGit 的
+# `etc/gitconfig`）会让同一个文件在 Windows 上 checkout 成全 CRLF、
+# 在 Linux 上成全 LF。本仓库的价值主张里有「可 git diff」——
+# 跨平台一次编辑就产出整文件 diff，真正的改动会被埋在几千行里。
+#
+# 所以策略钉在这里，**不让机器级的设置决定这个仓库里的字节**。
+# 顺序不能反：先有这个文件，再归一化（`git add --renormalize .`）。
+# 反过来做会复发 —— 编辑器一写就回到 CRLF。
+
+* text=auto eol=lf
+
+# 二进制：将来加进来时不许被当文本转换。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.db   binary
