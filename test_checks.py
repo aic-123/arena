@@ -39,12 +39,51 @@ ROOT = Path(__file__).parent
 def _scan_with_temp_py(source: str) -> dict:
     """把 source 写成一个临时 .py 放进 arena/，跑完**全部**检查，删掉。"""
     probe = ROOT / "_tmp_probe_zzz.py"
-    assert not probe.exists(), "临时文件已存在，上次没清干净"
+    # 残留自愈：**不是** `assert not probe.exists()`。
+    # 为什么改成自愈，见 `Test00NoResidueAtStart` —— 一条残留会让十几条用例
+    # 连锁失败，而且第一条失败报的地方和真正的原因无关。
+    # 「有没有残留」这个问题由开头那一条和结尾那一条各管一次。
+    probe.unlink(missing_ok=True)
     probe.write_text(source, encoding="utf-8")
     try:
         return {code: run() for code, _what, _clause, run in checks.all_checks()}
     finally:
         probe.unlink()
+
+
+class Test00NoResidueAtStart(unittest.TestCase):
+    """**开跑之前**，产物目录必须是干净的。
+
+    为什么单开一条、而且类名排在最前（`Test00…` 在字母序里先于 `TestB12…`）：
+
+    残留的**后果会扩散**。每个 `_probe()` / `_scan_with_temp_py()` 原来都以
+    `assert not probe.exists()` 开头，于是一个残留文件会让后面十几条用例连锁失败 ——
+    **而第一条失败报的地方和真正的原因无关**。
+
+    实测（手动放一个残留探针，跑一遍）：**19 条失败**，
+    第一条报的是
+
+        FAIL: test_B12_accepts_a_type_that_comes_from_a_decision
+
+    看起来像 B12 的检查坏了。真正的原因（「上次没清干净」）只在
+    **最后一条** `TestNoResidue.test_no_probe_files_left_behind` 里才出现。
+    一条残留，19 条误导性失败。
+
+    所以把「有没有残留」**收敛成两条、各管一头**：
+    - 本类管**上一轮**留下的（跑在第一条）
+    - `TestNoResidue` 管**这一轮**留下的（跑在最后一条）
+    中间的 helper 一律 `unlink(missing_ok=True)` 自愈，不再各自断言。
+
+    这和本仓库一直在防的那类病是同一个：**残留和检查失效长得一模一样**。
+    """
+
+    def test_no_residue_before_the_run_starts(self):
+        left = sorted(p.name for p in ROOT.rglob("_tmp_probe*"))
+        self.assertEqual(
+            left, [],
+            f"开跑前就有残留：{left} —— 上一轮被打断了"
+            f"（管道提前关闭 / Ctrl-C / 进程被杀）。删掉再跑。",
+        )
 
 
 class TestEveryCheckFires(unittest.TestCase):
@@ -153,7 +192,7 @@ class TestB8Fires(unittest.TestCase):
 
     def test_B8_fires_on_a_filled_annotation(self):
         probe = ROOT / "samples" / "_tmp_probe_zzz.md"
-        assert not probe.exists()
+        probe.unlink(missing_ok=True)
         probe.write_text(
             "## 9999\n\n```yaml\n"
             "input: \"x\"\n"
@@ -174,6 +213,7 @@ class TestB8Fires(unittest.TestCase):
     def test_B8_lets_a_truly_annotated_sample_through(self):
         """需求方真标完之后，B8 就不该再管它。"""
         probe = ROOT / "samples" / "_tmp_probe_zzz.md"
+        probe.unlink(missing_ok=True)
         probe.write_text(
             "## 9999\n\n```yaml\n"
             "input: \"x\"\n"
@@ -200,7 +240,7 @@ class TestB9Fires(unittest.TestCase):
 
     def _probe(self, src: str) -> list:
         probe = ROOT / "_tmp_probe_zzz.py"
-        assert not probe.exists()
+        probe.unlink(missing_ok=True)
         probe.write_text(src, encoding="utf-8")
         try:
             return checks.check_apparatus_is_not_a_script(probe)
@@ -247,7 +287,7 @@ class TestB13Fires(unittest.TestCase):
 
     def _probe(self, body: str) -> list:
         probe = ROOT / "samples" / "_tmp_probe_zzz.md"
-        assert not probe.exists()
+        probe.unlink(missing_ok=True)
         probe.write_text(body, encoding="utf-8")
         try:
             return [h for h in checks.check_annotated_samples_name_their_source()
@@ -297,7 +337,7 @@ class TestB12Fires(unittest.TestCase):
 
     def _probe(self, src: str) -> list:
         probe = ROOT / "_tmp_probe_zzz.py"
-        assert not probe.exists()
+        probe.unlink(missing_ok=True)
         probe.write_text(src, encoding="utf-8")
         try:
             return checks.check_proposition_type_is_not_hardcoded(probe)
@@ -320,7 +360,12 @@ class TestB12Fires(unittest.TestCase):
 
 
 class TestNoResidue(unittest.TestCase):
-    """产物目录里不许有验伪留下的临时文件。"""
+    """产物目录里不许有验伪留下的临时文件。
+
+    这一条管的是**这一轮跑完**留下的。上一轮留下的由 `Test00NoResidueAtStart`
+    在开跑前管 —— 两条各管一头，中间的 helper 一律自愈。
+    分开的原因见 `Test00NoResidueAtStart` 的 docstring（一条残留 → 19 条误导性失败）。
+    """
 
     def test_no_probe_files_left_behind(self):
         left = [p.name for p in ROOT.rglob("_tmp_probe*")]
