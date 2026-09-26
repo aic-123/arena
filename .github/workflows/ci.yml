@@ -1,0 +1,104 @@
+name: CI
+
+# 这个仓库的核心声称是「文档说的，代码真的做到了」。
+# 那些声称落成了 checks.py 的 B1–B13 —— 没有 CI 的话，没有任何机器在守它们。
+#
+# 所以这里跑的**不是「测试通过」**，是「声明成立」：
+#   · 四个测试套件证明行为没变
+#   · checks.py 证明 13 条否证检查无命中
+#   · 最后一条证明 checks.py 自己**不是空转**（往产物里注入真违规，看它响不响）
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 一条腿挂了不要掐掉别的腿 —— 要看清是哪个平台 / 哪个版本的问题。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 本仓库的 B7 声称「第三方依赖为零」。
+      # 所以这里**故意不装任何包** —— 下面每一条都只用标准库。
+      # 哪天有人加了个 import 第三方的，这一步之前就会红。
+      - name: 确认零依赖（不装任何包）
+        run: python -c "import sys; print('Python', sys.version)"
+
+      - name: 结构与不变量
+        run: python test_arena.py
+
+      - name: 入口那一面（子进程 + 真 stdin + 真库）
+        run: python test_cli.py
+
+      - name: 样本折算判据
+        run: python samples/test_align.py
+
+      - name: 证明 checks.py 不是空转（注入真违规，看它响不响）
+        run: python test_checks.py
+
+      - name: 否证检查 B1–B13（退出码 0 = 全部声明成立）
+        run: python checks.py
+
+      # ⚠️ 这一条**故意不是**「跑一下看它崩不崩」。
+      #
+      # 并发装置的退出码**永远是 0** —— 「本轮未暴露」按 §T2 第 11 步是**有效结果**，
+      # 不是失败。所以「跑通了」在这里等于什么都没证明（恒绿的断言也是绿的）。
+      #
+      # 真正有意义的断言是那一条：**换手次数 > 0**。
+      # 4 个进程如果其实是排队跑完的，一条异常也不会有，而那样的「未暴露」
+      # 是**一句没有分母的结论** —— 这正是这个仓库一直在防的那个形状。
+      - name: 并发装置真的并发了（不是恒绿）
+        # windows runner 默认是 PowerShell，heredoc 是 bash 语法 —— 必须显式指定。
+        shell: bash
+        run: |
+          python - <<'PY'
+          import concurrency
+
+          r = concurrency.run(4, 6)
+          inter = r["交错"]
+          print(f"动作 {len(r['logs'])} 次，异常 {len(r['异常'])} 次，"
+                f"换手 {inter['换手次数']} 次，最长连续段 {inter['最长连续段']}")
+
+          fail = []
+          if r["crashes"]:
+              fail.append(f"有进程崩了：{r['crashes']}")
+          if r["异常"]:
+              fail.append(f"有异常动作 {len(r['异常'])} 次")
+          if inter["换手次数"] == 0:
+              fail.append("换手 0 次 —— 进程没有真正交错，这次「未暴露」没有分母，不算证据")
+          if fail:
+              raise SystemExit("\n".join(fail))
+
+          print("并发装置：跑起来了，而且真的交错了。")
+          PY
+
+      # 本仓库有一条自己的纪律：测试不许留下探针文件。
+      # 曾经漏掉的那一种是 .pyc（编译过的探针），所以这里按**名字**找，
+      # 不按后缀找 —— 找的是 `_tmp_probe*` 这个前缀下的一切。
+      - name: 不许留下探针
+        shell: bash
+        run: |
+          left=$(find . -name '_tmp_probe*' -not -path './.git/*' | wc -l)
+          echo "残留探针：$left"
+          if [ "$left" -ne 0 ]; then
+            find . -name '_tmp_probe*' -not -path './.git/*'
+            echo "::error::测试留下了探针文件"
+            exit 1
+          fi
