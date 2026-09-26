@@ -103,6 +103,16 @@ jobs:
               print("::error::CONC-STATS 动作=%d 异常=%d 换手=%d 段=%d"
                     % (len(r['logs']), len(r['异常']),
                        inter['换手次数'], inter['最长连续段']))
+              kinds = {}
+              for x in r['异常']:
+                  k = x['异常类型'] + " :: " + x['异常消息'][:70]
+                  kinds[k] = kinds.get(k, 0) + 1
+              for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]):
+                  print("::error::CONC-KIND x%d %s" % (n, k))
+              for x in r['异常'][:6]:
+                  print("::error::CONC-ONE %s / %s / %s / %s"
+                        % (x['actor'], x['动作'], x['异常类型'],
+                           x.get('最后一行', '')[:120]))
               raise SystemExit("\n".join(fail))
 
           print("并发装置：跑起来了，而且真的交错了。")
