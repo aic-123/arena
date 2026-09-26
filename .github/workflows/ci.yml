@@ -28,6 +28,21 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.13", "3.14"]
 
+    # 中文输出必须有 utf-8 才能打出来。
+    #
+    # Windows runner 的 `python` 默认 `sys.stdout.encoding` 是 **cp1252**，
+    # 而这里每一条都会打中文（检查名 / `过` / `命中`）。撞上去的表现是
+    # `UnicodeEncodeError` → 退出码 1 —— **和「有检查命中了」长得一模一样**。
+    # 2026-09-26 实测踩到过：windows 两条腿报 exit 1，看起来像《选型声明》不成立。
+    # 见 DECLARATION §18。
+    #
+    # 仓库里也自带 `_console.py`（各入口自己调），那管的是**用户直接跑**的场景。
+    # 这一层管的是**这个 workflow 里所有步骤**，包括下面那些内联的 heredoc ——
+    # 它们不走我们的模块，`_console.py` 罩不到。
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
     steps:
       - uses: actions/checkout@v4
 
