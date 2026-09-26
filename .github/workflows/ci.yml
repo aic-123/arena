@@ -53,6 +53,15 @@ jobs:
       - name: 证明 checks.py 不是空转（注入真违规，看它响不响）
         run: python test_checks.py
 
+      - name: 诊断（临时）
+        if: runner.os == 'Windows'
+        run: |
+          python -c "import sys,os; print('VER',sys.version); print('CWD',os.getcwd()); print('FSENC',sys.getfilesystemencoding()); print('STDOUT',sys.stdout.encoding)"
+          python -c "from pathlib import Path; [print('PY',p.as_posix()) for p in sorted(Path('.').rglob('*.py'))]"
+          python -c "from pathlib import Path; [print('PROBE',p.as_posix()) for p in sorted(Path('.').rglob('_tmp_probe*'))]"
+          python -c "from pathlib import Path; [print('MD',p.as_posix()) for p in sorted(Path('samples').glob('*.md'))]"
+          git status --porcelain
+
       - name: 否证检查 B1–B13（退出码 0 = 全部声明成立）
         run: python checks.py
 
