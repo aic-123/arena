@@ -99,6 +99,10 @@ jobs:
           if inter["换手次数"] == 0:
               fail.append("换手 0 次 —— 进程没有真正交错，这次「未暴露」没有分母，不算证据")
           if fail:
+              print("::error::CONC-FAIL " + " ;; ".join(fail))
+              print("::error::CONC-STATS 动作=%d 异常=%d 换手=%d 段=%d"
+                    % (len(r['logs']), len(r['异常']),
+                       inter['换手次数'], inter['最长连续段']))
               raise SystemExit("\n".join(fail))
 
           print("并发装置：跑起来了，而且真的交错了。")
