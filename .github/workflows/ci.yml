@@ -55,12 +55,22 @@ jobs:
 
       - name: 诊断（临时）
         if: runner.os == 'Windows'
+        shell: bash
         run: |
-          python -c "import sys,os; print('VER',sys.version); print('CWD',os.getcwd()); print('FSENC',sys.getfilesystemencoding()); print('STDOUT',sys.stdout.encoding)"
-          python -c "from pathlib import Path; [print('PY',p.as_posix()) for p in sorted(Path('.').rglob('*.py'))]"
-          python -c "from pathlib import Path; [print('PROBE',p.as_posix()) for p in sorted(Path('.').rglob('_tmp_probe*'))]"
-          python -c "from pathlib import Path; [print('MD',p.as_posix()) for p in sorted(Path('samples').glob('*.md'))]"
-          git status --porcelain
+          python - <<'PY'
+          import sys, os
+          from pathlib import Path
+          print(f"::error::VER {sys.version}")
+          print(f"::error::CWD {os.getcwd()}")
+          print(f"::error::FSENC {sys.getfilesystemencoding()} STDOUT {sys.stdout.encoding}")
+          pys = sorted(p.as_posix() for p in Path('.').rglob('*.py'))
+          print(f"::error::PYCOUNT {len(pys)} :: " + " | ".join(pys))
+          probes = sorted(p.as_posix() for p in Path('.').rglob('_tmp_probe*'))
+          print(f"::error::PROBES {probes}")
+          mds = sorted(p.as_posix() for p in Path('samples').glob('*.md'))
+          print(f"::error::MDS " + " | ".join(mds))
+          PY
+          echo "::error::GITSTATUS $(git status --porcelain | tr '\n' ';')"
 
       - name: 否证检查 B1–B13（退出码 0 = 全部声明成立）
         run: python checks.py
