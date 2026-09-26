@@ -79,6 +79,29 @@ jobs:
       # 真正有意义的断言是那一条：**换手次数 > 0**。
       # 4 个进程如果其实是排队跑完的，一条异常也不会有，而那样的「未暴露」
       # 是**一句没有分母的结论** —— 这正是这个仓库一直在防的那个形状。
+      #
+      # ⚠️⚠️ 2026-09-26 修正：这里原来还有一条 `if r["异常"]: fail`。**那条是错的。**
+      #
+      # 它把「异常数」当成了通过判据，而 §C11.2 的原话是：
+      # **异常不是失败 —— 异常正是本步要找的东西。**
+      # 「一轮跑完没暴露问题，如实汇报『本轮未暴露』」—— 反过来，
+      # 一轮**暴露了**问题，那是装置**干了活**，不是装置坏了。
+      #
+      # 那条断言实际在测的是**跑它的机器够不够快**：本机 16 核跑 4×6 稳定 0 异常，
+      # 压到 8×12 就复现出 96 个 `database is locked`；
+      # GitHub 的 windows runner 只有 2~4 核，于是 4×6 就撞。**同码不同芯，结论相反。**
+      # 那正是本仓库这个月第四次踩同一个形状 ——
+      # 把一个「运行环境恰好怎样」的性质，混进了「产物是否成立」的结论里。
+      #
+      # 而且 `database is locked` 是**已经记在案的未决风险**（DECLARATION §9.4）：
+      # 原子发号拿写锁，领号到 commit 之间别的写者进不来。当时拍板
+      # 「不预先引入机制」（§T5），所以它**本来就该被跑出来**。
+      #
+      # 改法：判据只看**有分母**（换手 > 0）+ **没有进程级崩溃**。
+      # 异常数照实打印，不判红 —— 它是**读数**，不是**判据**。
+      # 同时把参数从 4×6 提到 **8×12**：既然 locked 是已知的未决风险，
+      # 就该让它**稳定地暴露出来**，而不是偶尔红一次让人以为是抖动。
+      # 「一个已知的风险，要么稳定地被看见，要么稳定地被修掉 —— 不要让它飘。」
       - name: 并发装置真的并发了（不是恒绿）
         # windows runner 默认是 PowerShell，heredoc 是 bash 语法 —— 必须显式指定。
         shell: bash
@@ -86,36 +109,35 @@ jobs:
           python - <<'PY'
           import concurrency
 
-          r = concurrency.run(4, 6)
+          r = concurrency.run(8, 12)
           inter = r["交错"]
           print(f"动作 {len(r['logs'])} 次，异常 {len(r['异常'])} 次，"
                 f"换手 {inter['换手次数']} 次，最长连续段 {inter['最长连续段']}")
 
+          # 异常按类型分组照实打印 —— 这是读数。
+          kinds = {}
+          for x in r["异常"]:
+              k = x["异常类型"] + " :: " + x["异常消息"][:70]
+              kinds[k] = kinds.get(k, 0) + 1
+          for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]):
+              print(f"    [异常] x{n}  {k}")
+          if kinds:
+              print("    以上是**暴露出来的现象**，不是失败 —— 见 §C11.2 与 DECLARATION §9.4。")
+
+          # 判据只有两条：真的交错了，且没有进程级崩溃。
           fail = []
           if r["crashes"]:
               fail.append(f"有进程崩了：{r['crashes']}")
-          if r["异常"]:
-              fail.append(f"有异常动作 {len(r['异常'])} 次")
           if inter["换手次数"] == 0:
-              fail.append("换手 0 次 —— 进程没有真正交错，这次「未暴露」没有分母，不算证据")
+              fail.append("换手 0 次 —— 进程没有真正交错，这次结果没有分母，不算证据")
           if fail:
               print("::error::CONC-FAIL " + " ;; ".join(fail))
               print("::error::CONC-STATS 动作=%d 异常=%d 换手=%d 段=%d"
                     % (len(r['logs']), len(r['异常']),
                        inter['换手次数'], inter['最长连续段']))
-              kinds = {}
-              for x in r['异常']:
-                  k = x['异常类型'] + " :: " + x['异常消息'][:70]
-                  kinds[k] = kinds.get(k, 0) + 1
-              for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]):
-                  print("::error::CONC-KIND x%d %s" % (n, k))
-              for x in r['异常'][:6]:
-                  print("::error::CONC-ONE %s / %s / %s / %s"
-                        % (x['actor'], x['动作'], x['异常类型'],
-                           x.get('最后一行', '')[:120]))
               raise SystemExit("\n".join(fail))
 
-          print("并发装置：跑起来了，而且真的交错了。")
+          print("并发装置：跑起来了，而且真的交错了（有分母）。")
           PY
 
       # 本仓库有一条自己的纪律：测试不许留下探针文件。
