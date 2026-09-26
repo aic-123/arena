@@ -31,7 +31,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INPUTS = ROOT / "samples" / "inputs.md"
-LABELS = ROOT.parent / "outputs" / "Arena-MVP-测试样本-标签.md"
+
+# ⚠️ 这份标签文件过去读的是 **仓库外面** 的 `../outputs/Arena-MVP-测试样本-标签.md`。
+#
+# 那是错的，而且错得不显眼：**在这台开发机上它一直是绿的**（父目录里恰好真有那个文件），
+# 所以谁都没发现。一进容器就 `FileNotFoundError` —— 2026-09-26 在
+# `python:3.13-slim` 里跑 `samples/test_align.py`，3 个 error 全指向这一行。
+#
+# 后果不只是「跑不起来」：**折算依赖一个不在仓库里的输入**，
+# 也就是说 `§T3` 那句「给出可复现的命令」对这份样本**根本不成立** ——
+# 任何 clone 这个仓库的人跑出来都会挂。
+#
+# 现在它是仓库内的一份文件（2026-09-26 按需求方拍板，甲方案）。
+# **数字一个都没变** —— 内容是逐字节拷进来的，所以 `4/20` / `20/20`
+# 以及 `README.md` / `DECLARATION.md` / `checks.py` 里那些实测值全部照旧。
+LABELS = ROOT / "samples" / "Arena-MVP-测试样本-标签.md"
 
 # 只认长度 ≥ 3 的连续匹配块。
 #

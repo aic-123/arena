@@ -146,7 +146,7 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
 | `test_arena.py` | 最小可跑检查 |
 | `test_cli.py` | 入口的检查。**跑的是产品那一面**：子进程 + 真 stdin，不 import 库来「模拟」用户 |
 | `test_checks.py` | 给 `checks.py` 做注入验伪 —— **证明它不是空转** |
-| `samples/` | `§C5.5.1` 的分割质量样本。折算：`proposed_count` 20/20、`boundaries` **4/20**（`align.py` 是那 4 条怎么来的） |
+| `samples/` | `§C5.5.1` 的分割质量样本。折算：`proposed_count` 20/20、`boundaries` **4/20**（`align.py` 是那 4 条怎么来的）。**样本原文和标签都在仓库内** —— 这份仓库里跑，不读仓库外面的任何路径 |
 | `spec/` | **这个系统照着什么建的** —— 身份与姿态 / 任务卡 / 约束附录 / 最早的设计稿。代码里所有 `§` 号都指向这里，[入口说明](spec/) |
 | `.github/workflows/ci.yml` | CI：两个平台 × 两个 Python 版本，跑全部检查 |
 | `LICENSE` | Apache-2.0 |

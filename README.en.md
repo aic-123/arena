@@ -141,7 +141,7 @@ required writing Python — that's *having no product surface*, not "no frontend
 | `test_arena.py` | Structure and invariant tests |
 | `test_cli.py` | Entry-point tests. **Exercises the product surface**: subprocess + real stdin, never imports the library to "simulate" a user |
 | `test_checks.py` | Injection-based verification of `checks.py` — **proves it isn't vacuous** |
-| `samples/` | `§C5.5.1` splitting-quality samples. `proposed_count` 20/20, `boundaries` **4/20** |
+| `samples/` | `§C5.5.1` splitting-quality samples. `proposed_count` 20/20, `boundaries` **4/20**. **Both the source text and the labels live inside this repository** — a run here reads nothing outside it |
 | `spec/` | **What this system was built against** — identity, task card, constraint appendix, original design draft. Every `§` code points here |
 | `.github/workflows/ci.yml` | CI: two platforms × two Python versions, all checks |
 | `LICENSE` | Apache-2.0 |

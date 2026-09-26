@@ -109,7 +109,7 @@ annotation:
   proposed_count_basis: 标签节点数 1
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 85%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0002
@@ -123,7 +123,7 @@ annotation:
   proposed_count_basis: 标签节点数 1
   boundaries: [[0, 13]]
   boundaries_basis: 折算 —— 全部 1 个内容节点逐字出现在原文里，切片直接对上（samples/align.py，MIN_RUN=3）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0003
@@ -137,7 +137,7 @@ annotation:
   proposed_count_basis: 标签节点数 1
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 33%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0004
@@ -151,7 +151,7 @@ annotation:
   proposed_count_basis: 标签节点数 3
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n2(覆盖 75%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0005
@@ -165,7 +165,7 @@ annotation:
   proposed_count_basis: 标签节点数 3
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 67%)、n2(覆盖 88%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0006
@@ -179,7 +179,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: [[0, 14], [17, 27]]
   boundaries_basis: 折算 —— 全部 2 个内容节点逐字出现在原文里，切片直接对上（samples/align.py，MIN_RUN=3）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0007
@@ -193,7 +193,7 @@ annotation:
   proposed_count_basis: 标签节点数 3
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 60%)、n2(覆盖 0%)、n3(覆盖 0%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0008
@@ -207,7 +207,7 @@ annotation:
   proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点（Assumption 且覆盖率 0）
   boundaries: [[2, 8], [10, 14]]
   boundaries_basis: 折算 —— 全部 2 个内容节点逐字出现在原文里，切片直接对上（samples/align.py，MIN_RUN=3）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0009
@@ -221,7 +221,7 @@ annotation:
   proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点（Assumption 且覆盖率 0）
   boundaries: [[0, 8], [12, 17]]
   boundaries_basis: 折算 —— 全部 2 个内容节点逐字出现在原文里，切片直接对上（samples/align.py，MIN_RUN=3）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0010
@@ -235,7 +235,7 @@ annotation:
   proposed_count_basis: 标签节点数 3 − 1 个标着「原文未出现」的节点（Assumption 且覆盖率 0）
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 0%)、n2(覆盖 60%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0011
@@ -249,7 +249,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n2(覆盖 85%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0012
@@ -263,7 +263,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 75%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0013
@@ -277,7 +277,7 @@ annotation:
   proposed_count_basis: 标签节点数 3
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 80%)、n2(覆盖 78%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0014
@@ -291,7 +291,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n2(覆盖 55%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0015
@@ -305,7 +305,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 36%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0016
@@ -319,7 +319,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 36%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0017
@@ -333,7 +333,7 @@ annotation:
   proposed_count_basis: 标签节点数 3
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n3(覆盖 40%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0018
@@ -347,7 +347,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 50%)、n2(覆盖 25%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0019
@@ -361,7 +361,7 @@ annotation:
   proposed_count_basis: 标签节点数 2
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n1(覆盖 78%)、n2(覆盖 0%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
 
 ## 0020
@@ -375,5 +375,5 @@ annotation:
   proposed_count_basis: 标签节点数 4
   boundaries: []
   boundaries_basis: 折不出来 —— 卡在 n2(覆盖 0%)：节点文本是转述不是原文切片，边界得推，推出来的是我的不是原文的（annotation-derived.md §2）
-  agent_filled: 需求方授权折算（2026-09-25）—— 依据 outputs/Arena-MVP-测试样本-标签.md，非需求方手划
+  agent_filled: 需求方授权折算（2026-09-25）—— 依据 samples/Arena-MVP-测试样本-标签.md（2026-09-26 起这份文件在仓库内），非需求方手划
 ```
