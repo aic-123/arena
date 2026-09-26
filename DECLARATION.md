@@ -1907,3 +1907,99 @@ LABELS = ROOT.parent / "outputs" / "Arena-MVP-测试样本-标签.md"
 **排查动作（便宜）**：`grep` 路径构造里有没有 `parent.parent` / `..` / 绝对路径。
 **验证动作（唯一可靠）**：把整个仓库挂进一个干净容器跑一遍。
 本地再怎么排查，你脚下那棵目录树都可能多出一点东西。
+
+---
+
+## §18 中文输出撞上 cp1252：一次「本地全过」的第二副面孔
+
+### 现象
+
+CI 的 windows 两条腿挂在 `checks.py`，报
+
+```
+Process completed with exit code 1.
+```
+
+ubuntu 两条腿全绿。**四条腿跑的是同一份代码、同一个提交。**
+
+而那个退出码**长得和「有一条否证检查命中了」一模一样** ——
+`checks.py` 的退出码 1 本来就只有一个含义：B 类声明不成立，停下提问。
+所以 CI 输出的字面意思是「有两台机器上《选型声明》不成立」。
+
+**它不是。** 它是打印的时候崩了。
+
+### 根因
+
+`checks.py` 的每一条结果行都带中文（`过` / `命中` / 检查名）。
+Windows 上 `python` 的 `sys.stdout.encoding` 默认是 **cp1252**，不是 utf-8。
+`print` 第一个中文字符 → `UnicodeEncodeError` → 进程退出 1。
+
+本地看不到，因为这台开发机的环境里有宿主注入的
+`PYTHONIOENCODING=utf-8` 和 `PYTHONUTF8=1`。
+`sys.stdout.encoding` 在这个 shell 里是 utf-8 —— 所以**同样的代码在这里过**。
+
+### 为什么这比「环境不同」严重
+
+同一个病，本仓库在这个月里踩了两次，**喂它的是两种完全不同的东西**：
+
+| | 喂它的是什么 | 它长什么样 |
+|---|---|---|
+| §17 `samples/align.py` | 仓库外面**恰好存在的一个文件** | 测试**全绿** |
+| §18 本节 | 环境里**恰好设了的一个变量** | 检查**退出 1** |
+
+两个都不是「环境差异」。环境差异会让事情**报错**；
+这两次都是**依赖了不该依赖的东西**，所以它安静地给出一个**看起来正常**的结果。
+
+更具体的：本地跑 `checks.py` 拿到退出码 0，会让人以为
+「B 类声明成立」是**代码的性质**。其实那一刻它同时还是
+「这台机器上 stdout 恰好是 utf-8」的性质。**两条性质混在一个退出码里。**
+
+### 拍板与代价
+
+**改法**：仓库自带 `_console.py`，提供 `force_utf8()`；
+四个会打中文的入口（`checks.py` / `cli.py` / `concurrency.py` / `samples/align.py`）
+在 `__main__` 里各调一次。不改 CI 的 env，不改任何调用方的环境。
+
+**为什么不在 CI 里设 `PYTHONIOENCODING=utf-8`**：
+那等于把「本仓库在 Windows 上能用」这个结论**记在 CI 的配置里**，
+而不是记在仓库里。谁把这段 YAML 换个地方用（复制到别的 workflow、
+在本地复现 CI、或者用户直接 `python cli.py`），就又会崩。
+**用户不会读我们的 ci.yml。** 他们只会 `python cli.py`。
+
+**代价**：多一个文件，多四处一行调用。
+`errors="replace"` 是兜底 —— 宁可打出一个问号，也不要让打印本身变成失败。
+一个缺失的汉字远没有一个假的退出码危险：**退出码是会被别人读成结论的**。
+
+### 改了什么
+
+- 新增 `_console.py`：`force_utf8()`，`reconfigure(encoding="utf-8", errors="replace")`，
+  改不了就沉默降级（输出被重定向时没有 `reconfigure`，那不该抛）。
+- `checks.py` / `cli.py` / `concurrency.py` / `samples/align.py` 各接一行。
+  `align.py` 在子目录，所以顺带把仓库根插进 `sys.path`。
+- CI 里那条临时诊断步骤已删除（它只用来把 `STDOUT cp1252` 打出来）。
+
+### 验证
+
+在**复现条件**下验（`PYTHONUTF8=0 PYTHONIOENCODING=cp1252`，即 runner 的形态）：
+
+| 入口 | 改前 | 改后 |
+|---|---|---|
+| `checks.py` | exit 1，`UnicodeEncodeError` | exit 0，13 条全过，中文正常 |
+| `cli.py` | exit 1，`UnicodeEncodeError` | exit 2（无参数 → 打印用法），中文正常 |
+| `concurrency.py` | exit 1，`UnicodeEncodeError` | exit 2（同上），中文正常 |
+| `samples/align.py` | exit 1，`UnicodeEncodeError` | exit 0，中文正常 |
+| `vote.py` | 本来就过 | 过 |
+
+外加默认环境下全量：`test_arena` 142 / `test_checks` 25 / `test_cli` 19 /
+`samples.test_align` 14 / `checks.py` B1–B13 exit 0。
+
+### 教训
+
+**「本地全过」这句话，要连环境一起报。**
+
+它至少有两个说谎的方式，这个月两个都撞上了：
+一个是你脚下多了一份文件，一个是你手上多了一个变量。
+两者的共同点不是「机器不一样」，是**你把结论建立在了一个没写进仓库的前提上**。
+
+判据可以写死成一句：**一个退出码如果要被读成结论，
+它就不能同时依赖「运行环境恰好是怎么配的」。**

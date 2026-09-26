@@ -27,9 +27,19 @@ from __future__ import annotations
 
 import difflib
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# `_console.py` 在仓库顶层，本文件在 `samples/` 下 —— 直接把仓库根加进来。
+# 只在**直接跑这个脚本**时才需要；被 `test_align.py` import 时
+# `sys.path[0]` 已经是 `samples/`，同样能靠下面这行找到根。
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from _console import force_utf8  # noqa: E402
+
 INPUTS = ROOT / "samples" / "inputs.md"
 
 # ⚠️ 这份标签文件过去读的是 **仓库外面** 的 `../outputs/Arena-MVP-测试样本-标签.md`。
@@ -309,6 +319,7 @@ def _rewrite_yaml_line(body: str, key: str, value: str) -> str:
 
 if __name__ == "__main__":
     import sys
+    force_utf8()
     if "--write" in sys.argv:
         write_back()
     else:

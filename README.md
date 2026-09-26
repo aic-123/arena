@@ -143,6 +143,7 @@ python samples/test_align.py  # 上面那个判据自己的检查（「删」和
 | `vote.py` | 投票（`§C12`）。四个量分离、**永不给它们之间加算子**。旧票不跨问题版本相加。`chart()` 是只读派生视图：**一张图一个 `question_version`**、派生子论点另开一张、终端 Braille 折线图 |
 | `concurrency.py` | `§T2` 第 10 步的并发装置（原 `concurrent.py`，2026-09-25 改名，见 DECLARATION §15）。N 个真进程、**无协调**、只调产品 API（B9 盯着） |
 | `checks.py` | `§T4.2` 的可执行否证检查 B1–B13 |
+| `_console.py` | 让输出不依赖环境的代码页。Windows 上 `python` 默认是 cp1252，打中文会崩，**而那个退出码长得和「检查命中」一样**（见 DECLARATION §18） |
 | `test_arena.py` | 最小可跑检查 |
 | `test_cli.py` | 入口的检查。**跑的是产品那一面**：子进程 + 真 stdin，不 import 库来「模拟」用户 |
 | `test_checks.py` | 给 `checks.py` 做注入验伪 —— **证明它不是空转** |

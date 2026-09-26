@@ -47,6 +47,8 @@ import tempfile
 import traceback
 from pathlib import Path
 
+from _console import force_utf8
+
 import confirm
 import debate
 import scaffold
@@ -366,4 +368,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    force_utf8()
     raise SystemExit(main(sys.argv))

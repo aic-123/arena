@@ -40,6 +40,8 @@ import os
 import sqlite3
 import sys
 
+from _console import force_utf8
+
 import confirm
 import debate
 import observe
@@ -264,4 +266,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    force_utf8()
     raise SystemExit(main(sys.argv))

@@ -32,6 +32,8 @@ import tokenize
 from functools import partial
 from pathlib import Path
 
+from _console import force_utf8
+
 ROOT = Path(__file__).parent
 
 # 不在扫描范围内的**只有这两个文件**，因为它们是**验伪装置本身**：
@@ -469,4 +471,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    force_utf8()
     raise SystemExit(main())

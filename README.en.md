@@ -138,6 +138,7 @@ required writing Python — that's *having no product surface*, not "no frontend
 | `vote.py` | Voting (`§C12`). Four quantities kept separate, **never combined by any operator**. `chart()` is a read-only derived view |
 | `concurrency.py` | The step-10 apparatus. N real processes, **no coordination**, product API only (B9 watches this) |
 | `checks.py` | The executable falsification checks B1–B13 (`§T4.2`) |
+| `_console.py` | Keeps output independent of the environment's code page. On Windows `python` defaults to cp1252, where printing Chinese crashes — **and that exit code looks exactly like "a check fired"** (DECLARATION §18) |
 | `test_arena.py` | Structure and invariant tests |
 | `test_cli.py` | Entry-point tests. **Exercises the product surface**: subprocess + real stdin, never imports the library to "simulate" a user |
 | `test_checks.py` | Injection-based verification of `checks.py` — **proves it isn't vacuous** |
