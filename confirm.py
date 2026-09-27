@@ -48,8 +48,11 @@
 
 **不调用它也写得进去** —— 这是需求方 2026-09-25 定的 `§C2.5` **第 2 档**：
 默认取候选第一项，默认生效、可推翻、抽检、计改判率。
-理由是**不让人为少数命题多判断一次**。四件事一件都不能少，
-「记录默认」在第 393 行那儿，缺了它这一档就退化成无痕默认。
+理由是**不让人为少数命题多判断一次**。四件事一件都不能少。
+「默认生效」靠 `with_cand`，「可推翻」靠 `resolve_types()`，
+「抽检 + 计改判率」靠 `types_defaulted` 事件与 artifact 里的 `type_basis`（见写入段）。
+**缺了留痕，这一档就退化成无痕默认 —— 比第 1 档更糟**：
+第 1 档至少留下「没定」，无痕默认看起来像「引擎判对了」。
 
 我原来做的是第 1 档（不定完不写）。已推翻，见 DECLARATION §10.2。
 
@@ -69,7 +72,7 @@ from datetime import datetime, timezone
 from scaffold import (
     ScaffoldError, add_artifact, add_relation, activate, next_seq, record_event,
 )
-from segment import segment
+from segment import DEFAULT_PROPOSITION_TYPE, segment
 
 TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
@@ -245,6 +248,28 @@ def render(conn: sqlite3.Connection, draft_id: str) -> str:
                     f"字面分不出来，规则引擎不猜 —— 默认不是判断，是**待抽检的占位**。"
                     f"要改就调 resolve_types()。"
                 )
+        elif x["key"] in resolved:
+            lines.append(f"      节点类型：{resolved[x['key']]}（由人指定）")
+        elif x["role"] == "causal":
+            # 连接词本身成的节点（内容就是「所以」）。它也不带候选，
+            # 但原因与「普通陈述句」不同 —— 别说成「无连接词可读」，
+            # 它**就是**那个连接词。两种来源在 `type_basis` 里是分开的。
+            lines.append(
+                f"      节点类型：{DEFAULT_PROPOSITION_TYPE}"
+                f"（这是连接词本身成的节点，断言「前件导致后件」；"
+                f"记为 type_basis=causal_connective，可抽检）"
+            )
+        else:
+            # 普通陈述句 —— 引擎没连接词可读，落 `DEFAULT_PROPOSITION_TYPE`。
+            # **这一行以前不印**，于是整屏看不到任何类型信息，
+            # 读起来就像「引擎什么都没判」。它确实没判 —— 但那是**有依据的没判**：
+            # 原文里没有因果连接词，所以没有两种可能可挑。
+            # 把「没有可判的东西」和「判了但没说」分开，就靠这一行。
+            lines.append(
+                f"      节点类型：{DEFAULT_PROPOSITION_TYPE}"
+                f"（无连接词可读 → 无可判，落声明过的默认；记为 type_basis="
+                f"no_candidate_default，可抽检）"
+            )
 
     lines += [
         "",
@@ -403,12 +428,39 @@ def confirm(
     resolved = p.get("resolved_types", {})
     candidates = {x["key"]: list(x["type_candidates"])
                   for x in p["propositions"] if x.get("type_candidates")}
-    defaulted = {k: v[0] for k, v in candidates.items() if k not in resolved}
-    if defaulted:
+
+    # 默认分两种**来源**，必须分开记。它们不是一回事：
+    #
+    #   causal_candidate_default —— 引擎给了候选（「X，所以 Y」两端），
+    #                               默认取候选第一项。**这是引擎的取舍**：
+    #                               人可以在 resolve_types() 里推翻它。
+    #   no_candidate_default    —— 引擎**没有依据**给候选（普通陈述句，
+    #                               由标点切出来），落在声明过的默认 `Claim` 上。
+    #                               **这里没有取舍**，因为没有任何可推翻的候选。
+    #
+    # 原来只记前一种。后一种落在 `candidates` 之外，于是**什么都不记** ——
+    # 而库里两种情况的 artifact 长得**完全一样**（type=Claim、
+    # type_decided_by 是 machine、没有 type_candidates）。
+    # 事后**查不出**这条类型是「引擎判的」还是「没依据时落回默认的」。
+    # 那正是本函数 docstring 说过的第 2 档退化形态：**无痕**。
+    #
+    # 别把这两条合并成一条事件 —— 合并之后「有候选但没走改判」和
+    # 「压根没有候选可判」又混在一起了，等于把这里的区分白做。
+    with_cand = {k: v[0] for k, v in candidates.items() if k not in resolved}
+    # 普通陈述句（`role="clause"`）与连接词节点（`role="causal"`）都不带候选。
+    # 两者都落 `DEFAULT_PROPOSITION_TYPE`，但 `type_basis` 分开记
+    # （见写入段）——「没有连接词可读」和「这就是连接词」不是一回事。
+    no_cand = {x["key"]: DEFAULT_PROPOSITION_TYPE
+               for x in p["propositions"]
+               if not x.get("type_candidates")
+               and x["key"] not in resolved}
+    if with_cand or no_cand:
         # 只有在**真的**用了默认值时才记。一条都没有就是零条事实，
         # 不写一个空事件进去 —— 空事件会让「这轮没走到」长得像「这轮改判率为 0」。
         record_event(conn, "types_defaulted", by, draft_id,
-                     {"defaults": defaulted, "candidates": candidates})
+                     {"causal_candidate_default": with_cand,
+                      "no_candidate_default": no_cand,
+                      "candidates": candidates})
 
     # ---- 写入 Scaffold ----
     frozen = {
@@ -428,17 +480,47 @@ def confirm(
         activate(conn, topic_id, by=by)
 
     machine = f"machine:segmenter/{p['segmenter_version']}"
-    chosen = {**defaulted, **resolved}
+    # 三块合起来覆盖全部命题，一个不漏：
+    #   with_cand  有候选（引擎给了两种可能）
+    #   resolved   人改过的
+    #   no_cand    普通陈述句（含连接词节点 —— 它也不带候选，见下）
+    # 顺序照旧：人的判断压过默认。`causal` 节点落在 `no_cand` 里，
+    # 所以 `chosen[k]` 对每个 k 都取得到。
+    chosen = {**with_cand, **no_cand, **resolved}
     for x in p["propositions"]:
-        # 没有候选的命题（普通陈述句）仍旧是 Claim —— 那是个**已声明的**默认，
-        # 不是这次的空白：只有「X，所以 Y」那两端是引擎答不了的。见 DECLARATION §10。
+        # 没候选的命题（普通陈述句）落在 `DEFAULT_PROPOSITION_TYPE` —— 那是个
+        # **已声明的**默认，不是这次的空白：只有「X，所以 Y」那两端是引擎答不了的。
+        # 见 DECLARATION §10.2 与 `segment.DEFAULT_PROPOSITION_TYPE`。
+        #
+        # `type_basis` 说清这个类型**是凭什么来的**。四档，一条不漏：
+        #
+        #   user_resolved            人改了 —— `resolve_types()` 给的，已进 `types_resolved`
+        #   causal_candidate_default 有候选但没改 —— 走默认，人可推翻
+        #   causal_connective        连接词本身成节点（`role="causal"`，
+        #                            内容就是「所以」）—— 它**不是陈述句**，
+        #                            与下面那档不是一回事，别混
+        #   no_candidate_default     普通陈述句 —— 没有连接词可读，没有候选可给，
+        #                            落在声明过的默认上
+        #
+        # 后两档的 type 结果相同（都是 Claim，见 DECLARATION §10.2 的因果即主张），
+        # 但**凭什么**不同：一个原文里有「所以」，一个没有。
+        # 没有它，前两档在库里同形 —— 那正是这段代码要修的病。
+        if x["key"] in resolved:
+            basis = "user_resolved"
+        elif x["key"] in with_cand:
+            basis = "causal_candidate_default"
+        elif x["role"] == "causal":
+            basis = "causal_connective"
+        else:
+            basis = "no_candidate_default"
         cid = add_artifact(
-            conn, type_=chosen.get(x["key"], "Claim"),
+            conn, type_=chosen[x["key"]],
             content={**frozen, "text": x["text"], "raw_text": x["text"],
                      "role": x["role"], "span": x["span"],
                      # 这个类型是谁定的。没候选的是引擎默认，有候选的是人定的。
                      # 留痕是为了 `§C9` #9：结构不能有一个说不出出处的字段。
                      "type_decided_by": by if x["key"] in resolved else machine,
+                     "type_basis": basis,
                      # 候选本身也留在结构里。**默认生效的那条靠它才看得出来**：
                      # 有候选 + type_decided_by 是机器 = 这条走的是默认，
                      # 不是有依据的判断。§C2.5 第 2 档要的就是这个可抽检的痕迹。

@@ -48,6 +48,75 @@ python cli.py observe
 
 The DB defaults to `arena.db` (override with `ARENA_DB`). Bare `python cli.py` prints usage.
 
+**Prefer a browser over the terminal — for both reading and writing:**
+
+```bash
+python serve.py                 # → http://127.0.0.1:8765
+```
+
+On Windows you can also just double-click **`打开界面.bat`** — it starts the server,
+waits for the port, then opens the browser.
+
+**It opens even if the DB does not exist yet.** The view creates the table skeleton on
+startup (same path as `cli.py`), so a first run shows "no discussions in this DB yet"
+plus an "open a discussion" box — not a stack trace.
+
+**What the web view can do:**
+
+| Action | Replaces |
+|---|---|
+| Open a discussion | `cli.py new` |
+| Submit a passage → segment | `cli.py submit` |
+| **Confirm proposition by proposition** | `cli.py confirm` |
+| Reword and resubmit | `cli.py rewrite` |
+| Record "not submitting" | typing `q` at the prompt |
+| Read debates / observation points / tallies | `cli.py view` / `observe` / `chart` |
+
+**It is not a second write path.** Every action above merely *dispatches* the same
+functions in `debate.py` / `confirm.py` that `cli.py` calls. The evidence is concrete:
+run "flag as distorted → rewrite" through the web view and the **rewording rate in
+`observe` moves** (`1 / 1`) — that quantity is only computable if the write really went
+through the canonical path.
+
+**The confirmation step stays one-at-a-time on the web too.** All propositions are
+listed on one screen (that's layout), but each is answered individually — **there is no
+"confirm all" button**. And:
+
+- **No answer ≠ agree**: if any proposition is unanswered, nothing at all is written
+- **"Not submitting" is a button you press**, not closing the page — pressing it records
+  `draft_abandoned`; closing the page **writes nothing** (the system cannot tell
+  "you left" from "the script broke")
+- When you accept the default node type, **that default is recorded in the DB** —
+  auditable and overrulable
+
+**On "why is every proposition typed `Claim`".** This gets misread often, so:
+
+| Input | What the engine can decide | Outcome |
+|---|---|---|
+| "The work is too intense, **so** people won't climb" | Two possibilities (causal-as-claim / causal-as-inference); the text alone cannot tell them apart | Candidates `[Claim, Evidence]`, **defaults to Claim**, overrulable |
+| "Online discussion is getting more emotional" (no connective) | **Nothing to decide** — the text contains no connective to read | `Claim`, recorded as `type_basis=no_candidate_default` |
+
+Both land on `Claim`, but for **different reasons**, recorded separately in `type_basis`.
+So "everything is Claim" does not mean "type resolution is broken" — in the second case
+the engine genuinely **had nothing to decide**, and that is not a failed judgment.
+
+Telling "nothing to decide" apart from "decided but not reported" is exactly what
+`type_basis` is for: `user_resolved` (a person chose) / `causal_candidate_default`
+(candidates existed, default taken) / `causal_connective` (the connective itself became
+a node) / `no_candidate_default` (no connective to read).
+
+**Identity is entered once at the top of the page** and kept in a browser cookie.
+Without it, writes are refused: every write records *who* proposed it, and the
+`§C2.4` observation points are computed **per person**, so this cannot be blank.
+
+**The only thing not wired up is the *cast* half of voting.** `§C12` requires deciding
+"how options are presented to a person" first — that is a product judgment
+(DECLARATION §13.5), and guessing costs more than asking. Reading tallies (`chart`) works.
+
+**Zero third-party dependencies** — standard library `http.server` only. Not for lack of
+mature frameworks: `§T5` (adding a dependency is a stop-the-line blocker) confines the
+choice to the standard library.
+
 The confirmation step asks **one proposition at a time**: `y` = not distorted / `n` = distorted /
 `q` = don't submit / Enter = no answer. **Enter does not mean agree** — if some are unanswered,
 nothing is written at all. That's not friction; it's the step `§C5` names: this is where a user

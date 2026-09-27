@@ -63,6 +63,24 @@ _EDGE_PUNCT = "，,、 \t\n\r　"
 # 定夺动作在两档里都没有位置，只能由人补。见 DECLARATION §10。
 CAUSAL_END_CANDIDATES = ("Claim", "Evidence")
 
+# 普通陈述句落在哪 —— **一个已声明的默认，不是引擎的取舍**。
+#
+# 区别要紧，别和上面那个候选混起来：
+#
+#   CAUSAL_END_CANDIDATES      引擎**给得出**两种可能，只是不敢选 → 人可推翻
+#   DEFAULT_PROPOSITION_TYPE   引擎**给不出**候选（没有连接词可读），
+#                              落在文本里的既有约定上 → 没有可推翻的东西
+#
+# 后者不违反 `§C9` #12（命题类型不许写死）：写死指的是把**引擎的取舍**固化，
+# 让它推不翻。这里没有取舍 —— 加了连接词的句子照样走上面那条候选路。
+# 它属于 DECLARATION §10.2 声明过的那条边界：「普通陈述句仍然默认 `Claim`」。
+#
+# ⚠️ **但它必须留痕。** 有候选的默认与无候选的默认，在库里长得一模一样
+# （都是 type=Claim + type_decided_by 是 machine + 没有 type_candidates），
+# 事后分不出来。所以 `confirm.py` 把这个常量写进 artifact 的 `type_basis`，
+# 并记一条 `types_defaulted`。**没有痕迹的默认不是默认，是静默判断。**
+DEFAULT_PROPOSITION_TYPE = "Claim"
+
 
 def _trim(text: str, start: int) -> tuple[str, int]:
     """剥掉切片两端的空白与边界标点，返回 (干净文本, 新的起点)。

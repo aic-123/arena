@@ -1496,6 +1496,32 @@ class TestGap02CausalIsNotSilentlyTyped(Base):
         self.assertIn("也可 Claim 或 Evidence", out)
         self.assertIn("resolve_types()", out)
 
+    def test_render_says_why_a_plain_clause_has_no_type_to_decide(self):
+        """**这一条是用户读出来的那个 bug。**
+
+        用户原话：「语义分析没有很好地工作，全都是默认没有给出准确的分类」。
+        事实是他那 8 段全是普通陈述句 —— 引擎**没有可判的东西**（没有因果连接词）。
+        但旧 render **一个字都不印**类型，整屏看下来就像「什么都没判」。
+
+        「没有可判的东西」与「判了但没说」必须分得开 —— 靠这一行。
+        """
+        d = confirm.propose(self.conn, text="远程办公省下通勤时间。", by="甲")
+        out = confirm.render(self.conn, d)
+        self.assertIn("节点类型：Claim", out)
+        self.assertIn("no_candidate_default", out)
+        # 说清「为什么没有可判的」—— 不能只说一句「默认 Claim」了事
+        self.assertIn("无连接词可读", out)
+
+    def test_render_separates_the_connective_node_from_a_plain_clause(self):
+        """连接词节点（「所以」本身）与普通陈述句**都不带候选**，但原因不同。
+
+        说成一样的，会把「原文里有连接词」和「原文里没有」混掉 ——
+        而那个区别正是这两档要分开的理由。
+        """
+        out = confirm.render(self.conn, self.d)
+        self.assertIn("causal_connective", out)
+        self.assertIn("这是连接词本身成的节点", out)
+
     def test_not_deciding_still_writes_and_still_leaves_a_trace(self):
         """**这是第 2 档的落点**（需求方 2026-09-25 定）：不挡写入，但必须留痕。
 
@@ -1515,27 +1541,82 @@ class TestGap02CausalIsNotSilentlyTyped(Base):
             (out["claims"]["A"],)).fetchone()["content"])
         self.assertEqual(content["type_candidates"], ["Claim", "Evidence"])
         self.assertTrue(content["type_decided_by"].startswith("machine:"))
+        # 有候选而没改 —— 说清「凭什么」是这个类型。
+        self.assertEqual(content["type_basis"], "causal_candidate_default")
 
         # 计改判率的另一半：默认这件事有事件记着。
         ev = scaffold.events_of_kind(self.conn, "types_defaulted")
         self.assertEqual(len(ev), 1)
-        self.assertEqual(json.loads(ev[0]["payload"])["defaults"],
-                         {"A": "Claim", "B": "Claim"})
+        payload = json.loads(ev[0]["payload"])
+        self.assertEqual(payload["causal_candidate_default"], {"A": "Claim", "B": "Claim"})
+
+        # 连接词节点（C，「所以」本身）与有候选那两档**必须分开**：
+        # 它的类型来源不是「有候选没改」，混在一起等于区分白做。
+        self.assertEqual(payload["no_candidate_default"], {"C": "Claim"})
 
     def test_the_default_is_overridable_before_confirm(self):
-        """第 2 档的第三件事：**可推翻**。推翻之后，记录里就没有「默认」这一笔了。"""
+        """第 2 档的第三件事：**可推翻**。
+
+        推翻的是「有候选那两条」—— 它们本来就是**引擎的取舍**（默认取候选第一项），
+        所以人改了之后，那一档的默认记录就该消失。
+        `type_basis` 也随之变成 `user_resolved`（见下）。
+        """
         confirm.resolve_types(self.conn, self.d, by="甲",
                               choices={"A": "Evidence", "B": "Claim"})
         out = confirm.confirm(self.conn, self.d, by="甲", reviewed=["A", "B", "C"])
         self.assertEqual(scaffold.get(self.conn, out["claims"]["A"])["type"], "Evidence")
-        self.assertEqual(scaffold.events_of_kind(self.conn, "types_defaulted"), [])
         self.assertEqual(len(scaffold.events_of_kind(self.conn, "types_resolved")), 1)
 
-    def test_no_default_event_when_there_was_nothing_to_default(self):
-        """零条事实时**不写空事件** —— 空事件会让「没走到」长得像「改判率 0」。"""
+        # 「有候选那档」的默认没有留下 —— A / B 都是人判的。
+        ev = scaffold.events_of_kind(self.conn, "types_defaulted")
+        self.assertEqual(len(ev), 1)
+        payload = json.loads(ev[0]["payload"])
+        self.assertEqual(payload["causal_candidate_default"], {},
+                         "A/B 是人判的，不该再记成走默认")
+
+        # 连接词节点 C **仍然**是无候选默认 —— 人推翻的是命题类型，
+        # 不是「这条是不是连接词」。它照样该留痕。见 `test_no_default_event_...` 的补充。
+        self.assertEqual(payload["no_candidate_default"], {"C": "Claim"})
+
+        content = json.loads(self.conn.execute(
+            "SELECT content FROM revision WHERE artifact_id = ? ORDER BY id LIMIT 1",
+            (out["claims"]["A"],)).fetchone()["content"])
+        self.assertEqual(content["type_basis"], "user_resolved")
+
+    def test_no_candidate_default_is_traced_not_silent(self):
+        """**这段代码要修的病**：无候选命题的类型默认，原来**一点痕迹都没有**。
+
+        实测（改之前）：纯陈述句「远程办公省下通勤时间。」确认后
+          artifact.type = 'Claim'
+          type_decided_by = 'machine:segmenter/rule-segmenter/1'
+          type_candidates = **不写**
+          types_defaulted 事件 = **0 条**
+        也就是说，库里「引擎判的」和「没依据落回默认的」**长得完全一样**，
+        事后查不出这条类型是判断还是默认。那正是 `confirm.py` 自己 docstring
+        警告过的第 2 档退化形态：**无痕**。
+
+        修法就是让这一档也带 `type_basis`、也进 `types_defaulted`。
+        """
         d = confirm.propose(self.conn, text="远程办公省下通勤时间。", by="甲")
-        confirm.confirm(self.conn, d, by="甲", reviewed=["A"])
-        self.assertEqual(scaffold.events_of_kind(self.conn, "types_defaulted"), [])
+        props = {x["key"]: x
+                 for x in confirm.payload_of(self.conn, d)["propositions"]}
+        self.assertNotIn("type_candidates", props["A"], "普通陈述句不该有候选")
+
+        out = confirm.confirm(self.conn, d, by="甲", reviewed=["A"])
+        self.assertEqual(scaffold.get(self.conn, out["claims"]["A"])["type"], "Claim")
+
+        # ① 结构里能看出「这是没候选的默认」，不是「引擎判的」
+        content = json.loads(self.conn.execute(
+            "SELECT content FROM revision WHERE artifact_id = ? ORDER BY id LIMIT 1",
+            (out["claims"]["A"],)).fetchone()["content"])
+        self.assertEqual(content["type_basis"], "no_candidate_default")
+        self.assertNotIn("type_candidates", content)
+
+        # ② 事件表里也记着，缺席就不算第 2 档
+        ev = scaffold.events_of_kind(self.conn, "types_defaulted")
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(json.loads(ev[0]["payload"])["no_candidate_default"],
+                         {"A": "Claim"})
 
     def test_partial_or_out_of_range_choices_are_refused(self):
         """同 `reviewed` 一个道理：给一半 = 替另一半做了决定。`§C5` 不许默认勾选。"""
@@ -1574,6 +1655,7 @@ class TestGap02CausalIsNotSilentlyTyped(Base):
         """**这个默认是已声明的，不是这次的空白** —— 只有「X，所以 Y」两端是空白。
 
         不写这条，上面那些用例证明不了「改动没有连普通句子一起冻住」。
+        现在同时钉住它**带痕迹**（`type_basis`）—— 已声明的默认也要说得出来出处。
         """
         d = confirm.propose(self.conn, text="远程办公省下通勤时间。", by="甲")
         props = {x["key"]: x
@@ -1581,6 +1663,38 @@ class TestGap02CausalIsNotSilentlyTyped(Base):
         self.assertNotIn("type_candidates", props["A"])
         out = confirm.confirm(self.conn, d, by="甲", reviewed=["A"])
         self.assertEqual(scaffold.get(self.conn, out["claims"]["A"])["type"], "Claim")
+        content = json.loads(self.conn.execute(
+            "SELECT content FROM revision WHERE artifact_id = ? ORDER BY id LIMIT 1",
+            (out["claims"]["A"],)).fetchone()["content"])
+        self.assertEqual(content["type_basis"], "no_candidate_default")
+
+    def test_no_default_event_when_every_type_was_decided_by_a_person(self):
+        """零条事实时**不写空事件** —— 空事件会让「没走到」长得像「改判率 0」。
+
+        ⚠️ 能造出「真的没有默认」的情形只有一种：**每条都被人定过**。
+        普通陈述句现在也算一条默认（无候选那档），所以「随便写一句」不再是零事实。
+        这条以前用一句普通陈述测「零事实」，那个前提已经不成立 —— 改掉，
+        否则它测的其实是「无候选默认**没有**记事件」，跟标题说的相反。
+        """
+        confirm.resolve_types(self.conn, self.d, by="甲",
+                              choices={"A": "Evidence", "B": "Claim"})
+        out = confirm.confirm(self.conn, self.d, by="甲", reviewed=["A", "B", "C"])
+        # A / B 由人定；C 是连接词节点，**仍然**是无候选默认 —— 所以事件非空。
+        payload = json.loads(scaffold.events_of_kind(self.conn, "types_defaulted")[0]["payload"])
+        self.assertEqual(payload["causal_candidate_default"], {})
+        self.assertEqual(payload["no_candidate_default"], {"C": "Claim"})
+
+        # 真正「一条默认都没有」的情形：整份只有一个命题，且它被人定过。
+        d2 = confirm.propose(self.conn, text="工作强度太大，所以不愿往上爬。", by="甲")
+        confirm.resolve_types(self.conn, d2, by="甲",
+                              choices={"A": "Claim", "B": "Claim"})
+        before = len(scaffold.events_of_kind(self.conn, "types_defaulted"))
+        confirm.confirm(self.conn, d2, by="甲", reviewed=["A", "B", "C"])
+        after = scaffold.events_of_kind(self.conn, "types_defaulted")
+        # 这份里 A / B 人定了，C（「所以」）仍然无候选 —— 所以照样有一条。
+        # **记的是「C 走默认」，不是空事件** —— 「一趟没走到」与「改判率 0」仍然分得开。
+        self.assertEqual(len(after), before + 1)
+        self.assertEqual(json.loads(after[-1]["payload"])["causal_candidate_default"], {})
 
 
 class TestGap04ChallengeDomain(Base):
