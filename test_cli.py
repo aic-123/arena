@@ -262,5 +262,100 @@ class TestUsage(Base):
         self.assertIn("python cli.py chart", p.stderr)
 
 
+class TestUpperCommand(Base):
+    """`upper` 子命令 —— **默认只读**，要写就得把动作词说出来。
+
+    这条约定和 `view` / `chart` / `observe` 一致。理由：提议是**高频**动作
+    （每次重算都会跑），建是**低频**动作。默认写的话跑几次就多出一堆节点，
+    而「不得不清理自动产出的垃圾」正是让人开始乱删结构的起点。
+    """
+
+    def _debate_with_a_challenged_claim(self) -> str:
+        """造一个**真攒够信号**的库：一条命题被质询 3 次。
+
+        信号不够时 `upper` 只会印「候选 0 条」—— 那样这些用例就测不到写路径。
+        """
+        d = self.debate()
+        dr = self.submit(d, "甲", "现在的工作强度太大了，所以大家都不愿意往上爬。")
+        self.ok("confirm", d, dr, "甲", stdin="y\ny\ny\n\n\n")
+        # 三次质询走库层（CLI 没有 challenge 入口），直接用 python 补，
+        # 但仍走**产品 API**（`debate.challenge`），不手写 SQL。
+        code = (
+            "import os, scaffold, debate\n"
+            "from scaffold import get, add_relation\n"
+            f"conn = scaffold.connect(os.environ['ARENA_DB'])\n"
+            "claim = [r[0] for r in conn.execute("
+            "\"SELECT id FROM artifact WHERE type='Claim'\")][0]\n"
+            "for i in range(3):\n"
+            "    c = scaffold.add_artifact(conn, type_='Counterargument',\n"
+            "        content={'text': f'反驳{i}'}, origin='bob')\n"
+            "    scaffold.activate(conn, c, by='bob')\n"
+            "    add_relation(conn, kind='challenged_by', from_id=claim,\n"
+            "                 to_id=c, origin='bob')\n"
+            "conn.commit()\n"
+        )
+        env = {**os.environ, "ARENA_DB": self.db, "PYTHONIOENCODING": "utf-8"}
+        p = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        return d
+
+    def test_默认是只读的_不建任何东西(self):
+        """不带动作 = 看。这是这条命令最要紧的约定。"""
+        d = self._debate_with_a_challenged_claim()
+        out = self.ok("upper", d)
+        self.assertIn("还没有上层节点", out)
+        # 再问一次仍然没有 —— 说明上一次真的什么都没写
+        self.assertIn("还没有上层节点", self.ok("upper", d))
+
+    def test_propose_是只读的_候选看得到但没建(self):
+        d = self._debate_with_a_challenged_claim()
+        out = self.ok("upper", d, "propose")
+        self.assertIn("只读", out)
+        self.assertIn("challenge_counts", out)
+        self.assertIn("候选：1 条", out)
+        # 提议之后库里**还是**没有节点 —— 提议和建是两件事
+        self.assertIn("还没有上层节点", self.ok("upper", d))
+
+    def test_promote_建出来的节点名字是空的(self):
+        d = self._debate_with_a_challenged_claim()
+        out = self.ok("upper", d, "promote", "bob")
+        self.assertIn("ctx-0001", out)
+        v = self.ok("upper", d)
+        self.assertIn("ctx-0001", v)
+        self.assertIn("（待命名）", v)
+        # 视图必须明说这个名字是等谁来给 —— 「空」不能看起来像「有内容」
+        self.assertIn("名字由人来给", v)
+
+    def test_name_改完名之后依据还在(self):
+        """⚠️ 改名**只改名字**，依据不许丢（实测踩过：`signal` 变 `None`）。"""
+        d = self._debate_with_a_challenged_claim()
+        self.ok("upper", d, "promote", "bob")
+        out = self.ok("upper", d, "name", "ctx-0001", "甲", "围绕假设甲的分歧")
+        self.assertIn("围绕假设甲的分歧", out)
+        v = self.ok("upper", d)
+        self.assertIn("围绕假设甲的分歧", v)
+        self.assertIn("challenge_counts", v)      # 信号还在
+        self.assertIn("carg-0001", v)             # 依据还在
+
+    def test_空库上跑_说清楚是还没有还是算不出(self):
+        """空结果**永远附一句话**（同 `hints.scan()` 的规矩）。"""
+        d = self.debate()
+        out = self.ok("upper", d, "propose")
+        self.assertIn("候选：0 条", out)
+        self.assertIn("「还没有」和「算不出来」不是一回事", out)
+
+    def test_缺参数报的是用法(self):
+        p = self.run_cli("upper")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("python cli.py upper", p.stderr)
+
+    def test_不认识的动作报的是可选动作(self):
+        d = self.debate()
+        p = self.run_cli("upper", d, "wat")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("不认识的动作", p.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

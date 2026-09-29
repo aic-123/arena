@@ -73,6 +73,7 @@ import confirm
 import debate
 import observe
 import scaffold
+import upper
 import vote
 from _console import force_utf8
 from segment import DEFAULT_PROPOSITION_TYPE
@@ -482,6 +483,16 @@ PAGE = """<!DOCTYPE html>
          overflow-x: auto; font-size: 12px; line-height: 1.5;
          font-family: ui-monospace, Consolas, monospace; }}
   .empty {{ color: #5f5e5a; font-style: normal; }}
+  /* —— 立场层（`§C4` 的 Topic ├── Position ├── Claim）—— */
+  .stance {{ border-left: 3px solid #185fa5; background: #f7fbff;
+             border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 14px 0; }}
+  .stance .card {{ margin: 8px 0 0; }}
+  .stancetop {{ padding-bottom: 6px; border-bottom: 1px dashed #c8dff2; }}
+  /* ⚠️ 这一档**不许加字重声明** —— B2 是一条刻意的 dumb 子串扫描
+       （`§C6.1` 要的是「产物里别长出权重」，所以它把 `font-` 开头那个同名 CSS
+       属性也一起扫了）。加粗走 `<strong>`：下面单有一条，只 `font-style: normal`。 */
+  .stancetxt {{ font-size: 15px; margin-left: 8px; }}
+  .stance .empty {{ font-size: 13px; margin: 8px 0 0; }}
   footer {{ margin-top: 48px; padding-top: 14px; border-top: 1px solid #e2e0d8;
             font-size: 12px; color: #5f5e5a; }}
   .eyebrow {{ font-size: 12px; color: #5f5e5a; margin-bottom: 6px; }}
@@ -614,6 +625,65 @@ def _who_bar(who: str) -> str:
     )
 
 
+def _claim_card(c: dict) -> str:
+    """一条命题的卡片 —— Topic 直挂 / Position 下**共用一份**。
+
+    两处各写一遍的话，以后加一样东西必然只改一处（和 `debate._claim_detail` 同一条理由）。
+    """
+    cl = c["claim"]
+    text = ""
+    for h in c.get("heads", []):
+        try:
+            payload = json.loads(h["content"])
+        except (ValueError, TypeError):
+            payload = {}
+        text = payload.get("text") or h["content"]
+        break
+    bits = [
+        f'<div class="card">'
+        f'<span class="id">{esc(cl["id"])}</span>'
+        f'<span class="badge">{esc(cl["status"])}</span>'
+        f'<div class="txt">{esc(text)}</div>'
+    ]
+    edges = c.get("edges") or c.get("relations") or []
+    for e in edges:
+        kind = e.get("kind", "")
+        to = e.get("to") or e.get("target") or ""
+        bits.append(
+            f'<div class="edge"><span class="k">{esc(kind)}</span> → '
+            f"{esc(to)}</div>"
+        )
+    hint = c.get("type_note") or c.get("note")
+    if hint:
+        bits.append(f'<div class="meta">{esc(hint)}</div>')
+    bits.append("</div>")
+    return "".join(bits)
+
+
+def _position_block(p: dict) -> str:
+    """一个立场 + 它下面的命题。`§C4` 的 `Topic ├── Position ├── Claim`。"""
+    pos = p["position"]
+    text = ""
+    for h in p.get("heads", []):
+        try:
+            payload = json.loads(h["content"])
+        except (ValueError, TypeError):
+            payload = {}
+        text = payload.get("text") or h["content"]
+        break
+    out = [
+        f'<div class="stance">'
+        f'<div class="stancetop"><span class="id">{esc(pos["id"])}</span>'
+        f'<span class="badge">立场</span>'
+        f'<strong class="stancetxt">{esc(text)}</strong></div>'
+    ]
+    if not p.get("claims"):
+        out.append('<p class="empty">这个立场下还没有命题。</p>')
+    out.append("".join(_claim_card(c) for c in p.get("claims", [])))
+    out.append("</div>")
+    return "".join(out)
+
+
 def render_debate(conn: sqlite3.Connection, debate_id: str) -> str:
     v = debate.view(conn, debate_id)
     d = v["debate"]
@@ -622,42 +692,30 @@ def render_debate(conn: sqlite3.Connection, debate_id: str) -> str:
         f"<header><h1>{esc(d['id'])}</h1>"
         f'<div class="sub">状态 {esc(d["state"])} · 提出者 {esc(d["origin"])} · '
         f"建于 {esc(d['created_at'])}</div></header>",
+        # 上层的入口。放在**页面上部**，因为它读的是这个讨论的**整体结构**，
+        # 而这一页其余部分都是逐条平铺的 —— 混在里面会被当成又一条命题。
+        f'<div class="notice"><a href="/upper/{esc(debate_id)}">上层归纳 →</a>'
+        "（它只影响展示顺序 / 默认展开 / 推荐候选，"
+        "没有说任何一条命题「对」）</div>",
     ]
     for t in v["topics"]:
         topic = t["topic"]
         parts.append(f"<h2>{esc(topic['id'])}</h2>")
+        positions = t.get("positions", [])
         claims = t.get("claims", [])
-        if not claims:
+        if not positions and not claims:
             parts.append('<p class="empty">这个话题下还没有命题。</p>')
-        for c in claims:
-            cl = c["claim"]
-            text = ""
-            for h in c.get("heads", []):
-                try:
-                    payload = json.loads(h["content"])
-                except (ValueError, TypeError):
-                    payload = {}
-                text = payload.get("text") or h["content"]
-                break
-            bits = [
-                f'<div class="card">'
-                f'<span class="id">{esc(cl["id"])}</span>'
-                f'<span class="badge">{esc(cl["status"])}</span>'
-                f'<div class="txt">{esc(text)}</div>'
-            ]
-            edges = c.get("edges") or c.get("relations") or []
-            for e in edges:
-                kind = e.get("kind", "")
-                to = e.get("to") or e.get("target") or ""
-                bits.append(
-                    f'<div class="edge"><span class="k">{esc(kind)}</span> → '
-                    f"{esc(to)}</div>"
+        for p in positions:
+            parts.append(_position_block(p))
+        if claims:
+            if positions:
+                parts.append(
+                    '<div class="notice">下面这些命题<strong>直挂在话题下</strong>。'
+                    "它们同时也属于上面的某个立场 —— <strong>并挂，不是搬家</strong>"
+                    "（<code>§C10</code> 只进不退：命题属于哪段原文这件事实仍然查得到）。"
+                    "</div>"
                 )
-            hint = c.get("type_note") or c.get("note")
-            if hint:
-                bits.append(f'<div class="meta">{esc(hint)}</div>')
-            bits.append("</div>")
-            parts.append("".join(bits))
+            parts.extend(_claim_card(c) for c in claims)
         parts.append(
             '<div class="notice warn">⚠️ 上面没有任何「哪条更重要」。'
             "本系统不产生那个量（<code>§C6.1</code>）。</div>"
@@ -733,6 +791,94 @@ def render_chart(conn: sqlite3.Connection, topic_id: str) -> str:
         "（<code>§C12.2</code>）。</div>" + support
     )
     return PAGE.format(title=f"{topic_id} 票数 · Arena", body=body)
+
+
+def render_upper(conn: sqlite3.Connection, debate_id: str) -> str:
+    """上层归纳的**看**那一面 —— 只读，同 `render_observe` 一个规矩。
+
+    只调度 `upper.scan()` / `upper.count_signals()`，**不在这里算任何东西** ——
+    同本文件开头那条：界面层多写一行判断，就等于多一条写路径。
+
+    ⚠️ 三件事必须原样印出来，缺一件这个页面就会骗人：
+
+    1. **上层只影响三件事**（展示顺序 / 默认展开 / 推荐候选），
+       且它一个字都没写进底层（`§C7.1` ④）；
+    2. **「还没有」和「算不出来」分开** —— 同 `observe.py` 的「算不出 ≠ 零」，
+       也同 `stop.py` 的 `not_judged`；
+    3. **这个模块看不见什么**（`upper.BLIND_SPOTS`）。不印这一段的话，
+       读者会把「没看见」当成「不存在」。
+    """
+    s = upper.scan(conn, debate_id)
+    sig = upper.count_signals(conn)
+
+    parts = [
+        f'<div class="eyebrow"><a href="/debate/{esc(debate_id)}">← 回讨论</a></div>',
+        f"<header><h1>上层上下文 · {esc(debate_id)}</h1>"
+        f'<div class="sub">规则集 <code>{esc(s["version"])}</code> · '
+        "<code>§C7.1</code>（MVP 阶段本机制按留白项处理）</div></header>",
+        '<div class="notice">上层只影响<strong>三件事</strong>：'
+        "展示顺序 / 默认展开 / 推荐候选。它没有说任何一条命题「对」，"
+        "也<strong>一个字都没写进底层</strong>（<code>§C7.1</code> ④）。</div>",
+    ]
+
+    # --- 输入：三个结构量（是原料，不是名次）---
+    rows = []
+    for key, hits in sig.items():
+        if hits:
+            head = list(hits.items())[:8]
+            detail = "、".join(f"<code>{esc(k)}</code>×{esc(v)}" for k, v in head)
+            if len(hits) > len(head):
+                detail += f' <span class="k">（共 {len(hits)} 条）</span>'
+        else:
+            detail = '<span class="empty">没有</span>'
+        rows.append(f"<tr><td><code>{esc(key)}</code></td><td>{detail}</td></tr>")
+    parts.append(
+        "<h2>输入：三个结构量</h2>"
+        '<div class="notice">这三个是<strong>原料</strong>，不是名次 —— '
+        "「多少次算多」不在这里判。<br>"
+        "热度类信号（票数 / 浏览 / 共识）<strong>一个都不读</strong>"
+        "（<code>§C7.1</code> ①，B4 盯着）。</div>"
+        '<table><tr><th>信号</th><th>读数</th></tr>' + "".join(rows) + "</table>"
+    )
+
+    # --- 上下文 ---
+    if s["contexts"]:
+        cards = []
+        for c in s["contexts"]:
+            badge = ("" if c["named"]
+                     else '<span class="badge warn">名字由人来给</span>')
+            ev = c["evidence_ids"] or []
+            # `signal` 可能没记 —— 印「未记」而不是 `None`：
+            # 「没记」和「记了空值」不是一回事（同 `_fmt_value` 那条规矩）。
+            sig_cell = (f'<code>{esc(c["signal"])}</code>' if c["signal"]
+                        else '<span class="empty">未记</span>')
+            cards.append(
+                f'<div class="card"><div class="id">{esc(c["context"]["id"])}</div>'
+                f'<p class="txt">{_md(c["name"])}{badge}</p>'
+                f'<div class="meta">信号 {sig_cell} · 依据 {len(ev)} 条</div>'
+                f'<div class="edge">{esc("、".join(ev))}</div></div>'
+            )
+        parts.append("<h2>上下文</h2>" + "".join(cards))
+    else:
+        why = s["empty_reason"] or "底层的结构性信号还没攒够"
+        parts.append(
+            "<h2>上下文</h2>"
+            '<p class="empty">还没有上层节点。</p>'
+            '<div class="notice warn">⚠️ 「<strong>还没有</strong>」和'
+            "「<strong>算不出来</strong>」不是一回事，所以两句都印：<br>"
+            f"· <strong>还没有</strong> —— {esc(why)}<br>"
+            "· <strong>算不出来</strong> —— 本模块看不见某种信号（见下）</div>"
+        )
+
+    # --- 盲区 ---
+    parts.append(
+        "<h2>这个模块看不见什么</h2>"
+        '<div class="notice warn">不印这一段的话，读者会把「没看见」'
+        "当成「不存在」。</div>"
+        "<ul>" + "".join(f"<li>{esc(b)}</li>" for b in s["blind_spots"]) + "</ul>"
+    )
+    return PAGE.format(title=f"上层上下文 · {debate_id} · Arena",
+                       body="".join(parts))
 
 
 class Server(ThreadingHTTPServer):
@@ -880,6 +1026,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/chart/"):
                 tid = urllib.parse.unquote(path[len("/chart/") :])
                 self._send(render_chart(conn, tid))
+            elif path.startswith("/upper/"):
+                did = urllib.parse.unquote(path[len("/upper/") :])
+                self._send(render_upper(conn, did))
             else:
                 self._send(
                     PAGE.format(

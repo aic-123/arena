@@ -147,6 +147,125 @@ def add_to_topic(
                            topic_id=topic_id)
 
 
+# ---------------------------------------------------------------------------
+# 立场层（`§C4` 的 `Topic ├── Position/Claim`）—— 需求方 2026-09-27 要求
+# ---------------------------------------------------------------------------
+
+def stance_options(conn: sqlite3.Connection, topic_id: str) -> list[sqlite3.Row]:
+    """一个 Topic 下的立场节点，按 id 排序。
+
+    没有立场时返回空列表 —— **不是错误**。既有数据（每个 Topic 直接挂 Claim）
+    继续成立，调用方据此回退到旧行为。这条保证了本层是**增量**，不是破坏性改动。
+    """
+    rows = conn.execute(
+        "SELECT a.* FROM relation r JOIN artifact a ON a.id = r.to_id"
+        " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
+        "   AND a.type = 'Position' ORDER BY a.id",
+        (topic_id,),
+    ).fetchall()
+    return list(rows)
+
+
+def open_positions(
+    conn: sqlite3.Connection, *,
+    topic_id: str, stances: list[dict], by: str,
+) -> list[str]:
+    """给一个 Topic 建立场节点。
+
+    `stances` 是 `[{"text": "赞成…"}, {"text": "反对…"}, ...]`。
+    **不限定两个** —— `§C12.5` 明文「数据结构**禁止写死二元**」，
+    要能承载 `A / B / C / D`。MVP 里需求方要求二元对立，那是**用法**，不是**约束**。
+
+    --- 为什么这里不替用户归类 -------------------------------------------------
+
+    本函数**只建立场节点，不把任何命题挂进去**。归类由
+    `assign_stance()` 做，而那个函数的归类**必须由调用方给出**。
+    理由：判断「这条命题属于哪个立场」要的是**世界知识** ——
+    「算法放大冲突内容」是支持还是反对「讨论在变情绪化」，
+    取决于那个问题怎么问，字面看不出来。`§T0.3` 不许规则引擎自决，
+    同 `§10.2` 的命题类型是同一个坑。
+
+    机器在这里的角色是 `§C1` 说的 Secretary —— 搬运与登记，不是判断。
+    """
+    if not stances:
+        raise ScaffoldError("至少要有一个立场（`§C12.5`）。")
+    if any(not (s.get("text") or "").strip() for s in stances):
+        raise ScaffoldError("立场文本不能为空。")
+
+    topic = get(conn, topic_id)
+    if topic["type"] != "Topic":
+        raise ScaffoldError(f"{topic_id} 是 {topic['type']}，不是 Topic。")
+    if stance_options(conn, topic_id):
+        raise ScaffoldError(
+            f"{topic_id} 下已经有立场节点了。要改立场文本走 revise（`§C10` 不覆盖），"
+            "要加一个新立场就再调一次并自己决定它和现有立场的关系。"
+        )
+
+    made = []
+    for s in stances:
+        pid = add_artifact(
+            conn, type_="Position",
+            content={"text": s["text"], "raw_text": s["text"]},
+            origin=by,
+        )
+        # 立场是新断言（它断言「存在这样一种立场」）→ `§C2.5` 第 2 档
+        # 「新建可被独立引用的对象」那一档，**必须确认**。
+        # 这里由调用方（人）逐条给出，等价于已确认，所以可以直接 activate。
+        activate(conn, pid, by=by)
+        add_relation(conn, kind="contains", from_id=topic_id, to_id=pid, origin=by)
+        made.append(pid)
+    record_event(conn, "positions_opened", by, topic_id,
+                 {"positions": made, "texts": [s["text"] for s in stances]})
+    conn.commit()
+    return made
+
+
+def assign_stance(
+    conn: sqlite3.Connection, *, claim_id: str, position_id: str, by: str,
+) -> None:
+    """把一条已确认的命题挂到一个立场下。
+
+    ⚠️ **这是人做的判断，不是机器做的。** 本函数只负责落地 ——
+    它不检查「这条命题是否真的支持那个立场」，因为那要读世界知识（`§T0.3`）。
+
+    落地方式：`Position contains Claim`。原来那条 `Topic contains Claim`
+    **不删** —— `§C10` 只进不退，且并挂让「命题属于哪个 Topic」这件既有事实
+    仍然查得到。挂到立场是**多一层归属**，不是搬家。
+    """
+    claim = get(conn, claim_id)
+    if claim["type"] != "Claim":
+        raise ScaffoldError(f"{claim_id} 是 {claim['type']}，不是 Claim。")
+    pos = get(conn, position_id)
+    if pos["type"] != "Position":
+        raise ScaffoldError(f"{position_id} 是 {pos['type']}，不是 Position。")
+
+    # 同一个立场下不重复挂
+    dup = conn.execute(
+        "SELECT 1 FROM relation WHERE kind='contains' AND from_id=? AND to_id=?"
+        "   AND state='active'",
+        (position_id, claim_id),
+    ).fetchone()
+    if dup:
+        return
+    add_relation(conn, kind="contains", from_id=position_id, to_id=claim_id,
+                 origin=by)
+    record_event(conn, "stance_assigned", by, position_id,
+                 {"claim": claim_id})
+    conn.commit()
+
+
+def claims_of_position(conn: sqlite3.Connection, position_id: str) -> list:
+    """一个立场下的命题（只取 active 的 Claim）。"""
+    return [
+        r["to_id"] for r in conn.execute(
+            "SELECT r.to_id FROM relation r JOIN artifact a ON a.id = r.to_id"
+            " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
+            "   AND a.type = 'Claim' ORDER BY r.to_id",
+            (position_id,),
+        )
+    ]
+
+
 def amend_own_claim(
     conn: sqlite3.Connection, *, claim_id: str, text: str, by: str,
 ) -> int:
@@ -417,44 +536,76 @@ def view(conn: sqlite3.Connection, debate_id: str) -> dict:
     ).fetchall()
     out = {"debate": dict(debate), "topics": []}
     for t in topics:
-        claims = conn.execute(
+        # `§C4` 的 `Topic ├── Position/Claim`。**两层都取**：
+        # 直接挂在 Topic 下的 Claim（旧形状），与挂在 Position 下的 Claim（新形状）。
+        # 旧形状不消失 —— 没有立场的数据照样是完整的一份视图。
+        direct_claims = conn.execute(
             "SELECT a.* FROM relation r JOIN artifact a ON a.id = r.to_id"
             " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
-            " ORDER BY a.id",
+            "   AND a.type = 'Claim' ORDER BY a.id",
             (t["id"],),
         ).fetchall()
+        positions = []
+        for p in stance_options(conn, t["id"]):
+            positions.append({
+                "position": dict(p),
+                # 立场自己那版话（`§C10` 的当前版本）；多头时 `_said()` 照实说不挑分支。
+                "heads": [dict(h) for h in heads_of(conn, p["id"])],
+                "history": history_of(conn, p["id"]),
+                "claims": [
+                    _claim_detail(conn, c) for c in _claims_rows(
+                        conn, p["id"])
+                ],
+            })
         raw = original_content_of(conn, t["id"]).get("raw_text", "")
         out["topics"].append({
             "topic": dict(t),
             "subquestion_hints": scan_hints(raw),
-            "claims": [
-                {
-                    "claim": dict(c),
-                    "heads": [dict(h) for h in heads_of(conn, c["id"])],
-                    # `§C10` 的 Current State + Revision History。
-                    # 多头时 `history["current"]` 是 None，视图**不挑分支**。
-                    "history": history_of(conn, c["id"]),
-                    # `§C6.3` 的三种作用和 `§C4` 的三条出边，**分开列，不合并**。
-                    # 每条边都带 `relation.kind` 与 `relation.origin`：
-                    # 前者是它对**这一个** Claim 起的作用（`§C6.4`），
-                    # 后者是「谁判的」—— 改判率全靠它（`§C2.4`）。
-                    "evidence": _linked(conn, _into_claim(
-                        conn, c["id"], EVIDENCE_TO_CLAIM)),
-                    # 缺口①：因果主张的两端。方向是端 → 因果主张，
-                    # 所以这里跟 `evidence` 一样是**入边**。哪端是因、哪端是果
-                    # 由 `relation.kind` 区分（causal_premise / causal_conclusion），
-                    # 视图不合并它们、也不替谁排出先后。
-                    "causal_ends": _linked(conn, _into_claim(
-                        conn, c["id"], CAUSAL_END_KINDS)),
-                    "mechanisms": _linked(conn, _out_of_claim(conn, c["id"], "explains")),
-                    "assumptions": _linked(conn, _out_of_claim(conn, c["id"], "assumes")),
-                    "counterarguments": _linked(conn, _out_of_claim(
-                        conn, c["id"], "challenged_by")),
-                }
-                for c in claims
-            ],
+            "positions": positions,
+            "claims": [_claim_detail(conn, c) for c in direct_claims],
         })
     return out
+
+
+def _claims_rows(conn: sqlite3.Connection, position_id: str) -> list:
+    """一个立场下的 Claim 行（active）。与 `claims_of_position` 同口径，返回整行。"""
+    return list(conn.execute(
+        "SELECT a.* FROM relation r JOIN artifact a ON a.id = r.to_id"
+        " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
+        "   AND a.type = 'Claim' ORDER BY a.id",
+        (position_id,),
+    ).fetchall())
+
+
+def _claim_detail(conn: sqlite3.Connection, c) -> dict:
+    """一条 Claim 的完整视图 —— 把它产生的所有边都带上。
+
+    抽出来是因为现在**两个位置**都要它（Topic 直挂的、Position 下的）。
+    两处各写一遍的话，以后加一条边必然只改一处。
+    """
+    return {
+        "claim": dict(c),
+        "heads": [dict(h) for h in heads_of(conn, c["id"])],
+        # `§C10` 的 Current State + Revision History。
+        # 多头时 `history["current"]` 是 None，视图**不挑分支**。
+        "history": history_of(conn, c["id"]),
+        # `§C6.3` 的三种作用和 `§C4` 的三条出边，**分开列，不合并**。
+        # 每条边都带 `relation.kind` 与 `relation.origin`：
+        # 前者是它对**这一个** Claim 起的作用（`§C6.4`），
+        # 后者是「谁判的」—— 改判率全靠它（`§C2.4`）。
+        "evidence": _linked(conn, _into_claim(
+            conn, c["id"], EVIDENCE_TO_CLAIM)),
+        # 缺口①：因果主张的两端。方向是端 → 因果主张，
+        # 所以这里跟 `evidence` 一样是**入边**。哪端是因、哪端是果
+        # 由 `relation.kind` 区分（causal_premise / causal_conclusion），
+        # 视图不合并它们、也不替谁排出先后。
+        "causal_ends": _linked(conn, _into_claim(
+            conn, c["id"], CAUSAL_END_KINDS)),
+        "mechanisms": _linked(conn, _out_of_claim(conn, c["id"], "explains")),
+        "assumptions": _linked(conn, _out_of_claim(conn, c["id"], "assumes")),
+        "counterarguments": _linked(conn, _out_of_claim(
+            conn, c["id"], "challenged_by")),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +651,32 @@ def _edge_lines(label: str, items: list[dict]) -> list[str]:
     return out
 
 
+def _claim_block(conn: sqlite3.Connection, c: dict, indent: str = "  ") -> list[str]:
+    """一条 Claim 的呈现块 —— 行首前缀可调，供 Topic 直挂 / Position 下两种位置复用。
+
+    抽出来是因为**两个位置都要它**。各写一遍的话，以后给 Claim 加一样东西
+    （比如新的边）必然只改一处。
+    """
+    cl = c["claim"]
+    lines = [f"{indent}── {cl['type']} {cl['id']}   [{cl['status']}]"
+             f"  「{_said(c['heads'])}」"]
+    note = _type_note(c["heads"])
+    if note:
+        lines.append(indent + note.strip())
+    for label, key in (("证据", "evidence"),
+                       ("因果两端", "causal_ends"),
+                       ("机制", "mechanisms"),
+                       ("依赖前提", "assumptions"),
+                       ("质询", "counterarguments")):
+        lines += _edge_lines(label, c[key])
+    hist = c["history"]
+    if len(hist["revisions"]) > 1 or hist["current"] is None:
+        lines.append(f"{indent}  版本 {len(hist['revisions'])} 条"
+                     f"（`§C10`：旧版一行都没删）")
+    lines.append("")
+    return lines
+
+
 def render(conn: sqlite3.Connection, debate_id: str) -> str:
     """把一个 Debate 印成人看的。只读 —— 和 `view()` 一样一行都不写。
 
@@ -539,27 +716,31 @@ def render(conn: sqlite3.Connection, debate_id: str) -> str:
             lines.append(f"     {h['note']}")
         lines.append("")
 
-        if not t["claims"]:
-            lines += ["  还没有命题。", ""]
-            continue
+        # `§C4` 的 `Topic ├── Position/Claim`。**两层都印**：
+        # 有立场就先印立场（命题在各自立场下），没有立场的老 Topic 照常印直挂的命题。
+        # 两条路都走 `_claim_block()` —— 同一件事只有一份印法。
+        if t["positions"]:
+            for p in t["positions"]:
+                pos = p["position"]
+                lines += [f"  ═══ 立场 {pos['id']}  「{_said(p['heads'])}」"]
+                if pos.get("origin"):
+                    lines.append(f"      提出者：{pos['origin']}")
+                lines.append("")
+                if not p["claims"]:
+                    lines += ["      （这个立场下还没有命题）", ""]
+                for c in p["claims"]:
+                    # 缩进 +2：命题属于立场，版面上要看得出来它嵌在里面
+                    lines += _claim_block(conn, c, indent="      ")
+        if t["claims"]:
+            if t["positions"]:
+                lines += ["  ── 直挂在这个 Topic 下的命题"
+                          "（**并挂**：它们同时也属于上面的某个立场，`§C10` 只进不退）",
+                          ""]
+            for c in t["claims"]:
+                lines += _claim_block(conn, c)
 
-        for c in t["claims"]:
-            cl = c["claim"]
-            lines.append(f"  ── {cl['type']} {cl['id']}   [{cl['status']}]"
-                         f"  「{_said(c['heads'])}」")
-            note = _type_note(c["heads"])
-            if note:
-                lines.append(note)
-            for label, key in (("证据", "evidence"),
-                               ("因果两端", "causal_ends"),
-                               ("机制", "mechanisms"),
-                               ("依赖前提", "assumptions"),
-                               ("质询", "counterarguments")):
-                lines += _edge_lines(label, c[key])
-            hist = c["history"]
-            if len(hist["revisions"]) > 1 or hist["current"] is None:
-                lines.append(f"       版本 {len(hist['revisions'])} 条"
-                             f"（`§C10`：旧版一行都没删）")
-            lines.append("")
+        if not t["positions"] and not t["claims"]:
+            lines += ["  还没有命题。", ""]
+
     lines.append("⚠️ 上面没有任何「哪条更重要」。本系统不产生那个量（`§C6.1`）。")
     return "\n".join(lines)

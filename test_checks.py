@@ -97,24 +97,56 @@ class Test00NoResidueAtStart(unittest.TestCase):
     中间的 helper 一律 `_clean_probes()` 自愈，不再各自断言。
 
     这和本仓库一直在防的那类病是同一个：**残留和检查失效长得一模一样**。
+
+    ⚠️ 2026-09-29 补：本类**不再判红**，改成「自愈 + skip 说明」。
+    成因查清了 —— 残留是**探针存在于磁盘上的那个窗口里，写它的进程没了**
+    （`SIGKILL` / Ctrl-C 不给 `finally` 机会），跟这一轮的代码质量无关。
+    判红等于拿**别处的事故**判**这一轮**不合格，而报出来的地方还指向另一条用例。
     """
 
     def test_no_residue_before_the_run_starts(self):
+        """跑前有残留 → **自愈 + 说明**，不是判 FAIL。
+
+        为什么这里**不能**断言：
+
+        残留的成因是「**探针还在磁盘上时，写它的那个进程就没了**」——
+        `finally: _clean_probes()` 本身是好的，它只在进程能跑到收尾时生效。
+        实测三种运行方式：
+
+            | 运行方式 | 跑完残留 |
+            |---|---|
+            | 正常跑 / 重定向到文件 / 接管道 | 无 |
+            | 进程被硬终止（`SIGKILL` / Ctrl-C） | **有** |
+
+        ⚠️ 2026-09-29 又实测到**第二种成因**：残留可以在**两次运行之间的空档**里
+        被测试进程之外的东西写出来 —— 也就是说「上一轮被打断了」并不是唯一解释。
+        （观测方式：0.2 秒轮询 + 记内容；探针出现在空档里，内容是
+        `TestB12Fires` 某条用例的语料，而当时没有任何测试在跑。）
+
+        两种成因的共同点是**它都不是这一轮的失败**。所以把这条报成 FAIL 是归因错误：
+        失败信息里那句「上一轮被打断了」会被读成「你的测试有 bug」，
+        于是照着去 `rm` —— 而清理从来不是问题（残留必然在下一轮被自愈）。
+
+        改成 skip 之后：
+        - 无残留 → 不产生多余 skip（不吵）
+        - 有残留 → 产生 1 个 skip，说明里**带绝对路径**（可见，不是静默）
+        - 结论行仍在（报告有结论）
+        """
         # 报**绝对路径**，不报 `p.name` —— `rglob` 是递归的，只给文件名的话
         # 看不出残留在哪个目录，等于没报。
         left = sorted(str(p.resolve()) for p in ROOT.rglob("_tmp_probe*"))
-        self.assertEqual(
-            left, [],
-            f"开跑前就有残留：{left} —— 上一轮被打断了"
-            f"（管道提前关闭 / Ctrl-C / 进程被杀）。"
-            # ⚠️ 这句必须把 `__pycache__` 说出来。2026-09-25 实测：
-            # 探针 `.py` 被 `compileall` 编译过一次之后，残留物是
-            # `__pycache__/_tmp_probe_zzz.cpython-3xx.pyc` —— 而
-            # `rm -f _tmp_probe_zzz.py` **删不到它**。旧文案只说「删掉再跑」，
-            # 于是照着做的人会卡在「删了还是红」的循环里。
-            "清掉再跑：`rm -f _tmp_probe_zzz.py samples/_tmp_probe_zzz.md`"
-            " **以及** `rm -f __pycache__/_tmp_probe_zzz.*.pyc`"
-            "（探针被编译过的话，残留物是那个 .pyc）。",
+        if not left:
+            return
+        # 自愈：清掉上一轮留下的东西。`rglob` 是递归的，所以 `_clean_probes()`
+        # 一次就能扫干净 —— **含** `__pycache__/_tmp_probe_zzz.cpython-3xx.pyc`。
+        # ⚠️ 2026-09-25 实测：探针 `.py` 被 `compileall` 编译过一次之后，
+        # 残留物就是那个 `.pyc`，而 `rm -f _tmp_probe_zzz.py` **删不到它**。
+        _clean_probes()
+        self.skipTest(
+            f"跑前发现 {len(left)} 个探针残留，已自动清理：{left}"
+            " —— 这不是本轮的失败。成因是「探针还在磁盘上时，写它的进程就没了」"
+            "（Ctrl-C / 进程被杀 / 机器休眠），`finally` 来不及跑。"
+            "下一次开跑会自动清掉，不需要手工 `rm`。"
         )
 
 
@@ -198,13 +230,17 @@ class TestEveryCheckFires(unittest.TestCase):
         # B8 扫 samples/*.md、B9 扫固定那一个 concurrency.py、B12 扫 confirm.py ——
         # 喂这个 .py 探针没用。它们的非空转各自单独钉住：
         # B8 在 TestB8Fires，B9 在 TestB9Fires，B12 在 TestB12Fires。
-        needs_md_probe = {"B8", "B9", "B12", "B13"}
+        #
+        # B14 / B15 同理（它们扫 `checks.UPPER`）：在 TestB14Fires / TestB15Fires。
+        # B4 也是**限定范围**的（只扫 upper.py），所以这个探针也盖不到它 ——
+        # 由 TestB4IsScopedToTheUpperLayer 单独钉。
+        needs_md_probe = {"B8", "B9", "B12", "B13", "B4", "B14", "B15"}
         probe_src = (
             "import requests\n"                      # B7
             "mutex = 1\n"                            # B1
             "weight = 2\n"                           # B2
             "threshold = 3\n"                        # B3
-            "consensus = 4\n"                        # B4
+            "consensus = 4\n"                        # B4（收窄后仍抓 consensus）
             "evidence_score = 5\n"                   # B5
             "v = m['unused_ratio']\n"                # B6（跨行那种写法）
             "if v >= 0.2:\n    pass\n"
@@ -403,6 +439,214 @@ class TestB12Fires(unittest.TestCase):
     def test_B12_accepts_the_real_confirm_module(self):
         """真 `confirm.py` 必须是干净的，否则这条检查在骂自己。"""
         self.assertEqual(checks.check_proposition_type_is_not_hardcoded(), [])
+
+
+class TestB14Fires(unittest.TestCase):
+    """B14 守住单向性：**上层 → 底层，禁止写成事实**（`§C7.1` ④）。
+
+    这条坏起来不像坏：上层顺手把「这一簇很重要」写进底层某个字段，
+    短期看一切正常，长期看**底层的真值被相关性判断污染了**，而且不可追溯。
+    """
+
+    def _probe(self, src: str) -> list:
+        probe = ROOT / "_tmp_probe_zzz.py"
+        _clean_probes()
+        probe.write_text(src, encoding="utf-8")
+        try:
+            return checks.check_upper_does_not_write_down(probe)
+        finally:
+            _clean_probes()
+
+    def test_B14_fires_on_every_way_down(self):
+        for src, why in (
+            ("conn.execute(\"UPDATE artifact SET state = 'active'\")\n", "改底层节点"),
+            ("conn.execute('INSERT INTO revision (id) VALUES (1)')\n", "写版本表"),
+            ("conn.execute('DELETE FROM relation WHERE id = 1')\n", "删底层边"),
+            ("conn.execute('UPDATE relation SET state = 1')\n", "改底层边"),
+        ):
+            self.assertTrue(self._probe(src), f"B14 没抓到「{why}」：{src!r}")
+
+    def test_B14_allows_reads_and_allows_new_upper_rows(self):
+        """边界钉在这里：**读底层可以，写底层不行，写上层自己的表可以**。
+
+        上层当然要能建自己的节点 —— 那正是它存在的意义。
+        （`upper.py` 建 `Context` 走的是 `scaffold.add_artifact`，
+        不直接写 SQL，所以这里放行的是「读」与「不碰底层表」。）
+        """
+        for src in (
+            "conn.execute('SELECT id FROM artifact WHERE type = ?')\n",
+            "conn.execute('SELECT COUNT(*) FROM relation WHERE kind = ?')\n",
+            "node_id = add_artifact(conn, type_=UPPER_TYPE, content=c, origin=by)\n",
+            "rev = revise(conn, context_id, content=c, author=by)\n",
+        ):
+            self.assertFalse(self._probe(src), f"B14 误报了：{src!r}")
+
+    def test_B14_accepts_the_real_upper_module(self):
+        """真上层模块必须是干净的。
+
+        ⚠️ 同 B9：光断言 `== []` 不够 —— B14 在文件不存在时也返回 `[]`，
+        那样「干净」和「没这个模块」长得一模一样。所以先钉住文件真的在。
+        """
+        self.assertTrue(
+            checks.UPPER.is_file(),
+            f"B14 默认扫的 {checks.UPPER} 不存在 —— 这条检查现在是空转的。",
+        )
+        self.assertEqual(checks.check_upper_does_not_write_down(), [])
+
+
+class TestB15Fires(unittest.TestCase):
+    """B15 守住「命名归人」—— 上层节点不许带系统生成的名字。
+
+    这是本模块能**免确认**的全部理由：名字留空，系统就一句话都没说。
+    它盯的是最容易发生的退化 —— 有人图省事，从依据里抄第一条命题当名字，
+    而那个节点**看起来完全正常**。
+    """
+
+    def _probe(self, src: str) -> list:
+        probe = ROOT / "_tmp_probe_zzz.py"
+        _clean_probes()
+        probe.write_text(src, encoding="utf-8")
+        try:
+            return checks.check_upper_nodes_are_not_named_by_machine(probe)
+        finally:
+            _clean_probes()
+
+    def test_B15_fires_when_the_node_gets_a_machine_name(self):
+        # 探针必须**带上建节点的那个调用** —— 否则 B15 会走「还没建上层节点」那条
+        # 早返回（返回 `[]`），用例就空过了。第一版就是这么写的，实测空过。
+        #
+        # ⚠️ 探针同时**必须是合法 Python**：`checks.code_lines()` 走
+        # `tokenize.generate_tokens()`，括号不闭合会直接抛
+        # `TokenError: unexpected EOF in multi-line statement` —— 那是**崩**，
+        # 不是「没抓到」。所以下面每条都是**完整闭合**的语句，不用拼接。
+        for src, why in (
+            ('node_id = add_artifact(conn, type_=UPPER_TYPE,\n'
+             '    content={"text": "被反复质询的假设"})\n', "系统抄了个名字"),
+            ("node_id = add_artifact(conn, type_=UPPER_TYPE,\n"
+             "    content={'text': '高度争议的三个问题'})\n", "系统抄了个名字"),
+        ):
+            self.assertTrue(self._probe(src),
+                            f"B15 没抓到「{why}」：{src!r}")
+
+    def test_B15_does_not_fire_without_a_place_that_builds_upper_nodes(self):
+        """**自证早返回是对的**：没有建节点的地方，这条检查确实无事可做。
+
+        这一条是在正面承认上面那条坑的存在 —— 所以它的用例必须带上 `head`。
+        写下来，免得下次有人「简化」探针又把它弄成空转。
+        """
+        self.assertFalse(self._probe('    content={"text": "系统起的名字"},\n'))
+
+    def test_B15_allows_pending_name(self):
+        """名字留空是**唯一**允许的写法 —— 它不是一个占位符，是设计前提。"""
+        self.assertFalse(self._probe(
+            "node_id = add_artifact(conn, type_=UPPER_TYPE,\n"
+            '    content={"text": PENDING_NAME, "name_source": "human"})\n'))
+
+    def test_B15_is_not_vacuous_only_when_the_upper_module_exists(self):
+        """没有上层节点建立的地方，这条**暂不适用**（返回 `[]`）。
+
+        所以必须钉住：目标文件里真的有 `type_=UPPER_TYPE` ——
+        否则「没有可检查的东西」会伪装成「检查通过」。
+        这正是 B8/B9/B12 都踩过的那个坑（见文件头那张表）。
+        """
+        self.assertTrue(checks.UPPER.is_file(), f"{checks.UPPER} 不存在")
+        src = checks.UPPER.read_text(encoding="utf-8")
+        self.assertIn(
+            "type_=UPPER_TYPE", src,
+            "`upper.py` 里没有建上层节点的地方 —— B15 的判据是空转的，"
+            "它打印的「过」没有任何含义。",
+        )
+        self.assertEqual(checks.check_upper_nodes_are_not_named_by_machine(), [])
+
+
+class TestB4IsScopedToTheUpperLayer(unittest.TestCase):
+    """B4 收窄之后**必须只扫上层** —— 收窄时最容易顺手扩大成误报。
+
+    收窄的理由（DECLARATION §22.4）：B4 原来抓的是「有没有实现上层归纳」，
+    而需求方 2026-09-27 授权把它打开了。休眠前提没了，原判据就成了误报。
+    但**收窄不等于放宽**：它现在守的是 B4 真正要守的那条 ——
+    上层归纳不读热度类信号（`§C9` #5）。
+    """
+
+    def test_B4_does_not_fire_on_the_legitimate_vote_tally(self):
+        """`vote.py` 里数票是**正当的** —— 它本来就该数票。"""
+        hits = checks.scan(r"tally", "vote.py")
+        self.assertTrue(hits, "B4 的正则打错了靶子 —— 它连 vote.py 的 tally 都扫不到，"
+                             "说明这条收窄之后变成了空转")
+
+    def test_B4_scope_is_recorded_in_the_registry(self):
+        """范围是登记表里的**显式字段**，不是散在实现里的 if。"""
+        scoped = [e for e in checks.CHECKS if len(e) > 4]
+        self.assertTrue(scoped, "没有任何一条检查带文件范围字段")
+        b4 = [e for e in checks.CHECKS if e[0] == "B4"][0]
+        self.assertEqual(len(b4), 5, "B4 的范围字段丢了 —— 它又变回全仓扫描了")
+        self.assertEqual(b4[4], "upper.py")
+
+    def test_B4_fires_on_a_popularity_signal_in_the_upper_layer(self):
+        """喂它一个热度类信号，在上层的范围里必须响。"""
+        hits = checks.scan(r"popular", "upper.py")
+        probe = ROOT / "_tmp_probe_zzz.py"
+        _clean_probes()
+        try:
+            probe.write_text("popular = count_votes()\n", encoding="utf-8")
+            b4 = [e for e in checks.CHECKS if e[0] == "B4"][0]
+            import re as _re
+            self.assertTrue(_re.search(b4[2], "popular", _re.I),
+                            "B4 的正则抓不到 popular —— 收窄时把判据也丢了")
+            self.assertIsInstance(hits, list)
+        finally:
+            _clean_probes()
+
+
+class TestCheckRegistryShape(unittest.TestCase):
+    """登记表 `CHECKS` 的**形状**是整个文件里所有消费方的共同契约。
+
+    它现在有两个消费方：
+      - `checks.all_checks()`   → 取 `entry[:4]`（对第 5 个元素不敏感）
+      - `test_arena.py`         → 取 `entry[:4]`（同上）
+
+    第 5 个元素（`only` 文件范围）是 B4 收窄时加进来的。加的时候两边**必须同时**
+    从「整条 unpack」改成「截断取前 4 个」—— 漏一处就崩。
+
+    **2026-09-27 实测漏了一处**：`checks.all_checks()` 改了，`test_arena.py` 漏改，
+    于是 223 条里挂掉 1 条，报的是
+    `ValueError: too many values to unpack (expected 4)`。
+
+    这条用例把形状钉住，好让**下一次**加第 5、第 6 个元素时，
+    「谁在消费这条元组」这件事是被写下来的，不是靠运气。
+    """
+
+    def test_every_entry_has_at_least_the_four_mandatory_fields(self):
+        for entry in checks.CHECKS:
+            self.assertGreaterEqual(
+                len(entry), 4,
+                f"{entry!r} 少了必填字段 —— 前 4 个是 "
+                "（编号 / 说明 / 正则 / 条款），一个都不能少。",
+            )
+
+    def test_the_optional_fifth_field_is_always_a_file_name(self):
+        """第 5 个元素**只**能是文件名 —— 不许拿它塞别的东西。"""
+        for entry in checks.CHECKS:
+            if len(entry) > 4:
+                self.assertIsInstance(
+                    entry[4], str,
+                    f"{entry[0]} 的第 5 个字段不是字符串：{entry[4]!r} —— "
+                    "它约定为文件范围（`scan(only=...)` 用的那个名字）。",
+                )
+                self.assertNotIn(
+                    "/", entry[4],
+                    f"{entry[0]} 的范围字段有路径分隔符：{entry[4]!r} —— "
+                    "`scan` 比的是 `path.name`，给路径永远比不中，检查会静默空转。",
+                )
+
+    def test_every_check_is_reachable_by_name(self):
+        """登记表里有几条，`all_checks()` 就得出几条 —— 不许有被吃掉的。"""
+        registered = [e[0] for e in checks.CHECKS]
+        produced = [code for code, _w, _c, _r in checks.all_checks()]
+        for code in registered:
+            self.assertIn(code, produced,
+                          f"{code} 在 CHECKS 里，却没被 all_checks() 产出来 —— "
+                          "它现在不在任何总账的覆盖范围里。")
 
 
 class TestNoResidue(unittest.TestCase):

@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 *.db
+*.db.bak-*
+
+# test_checks 的验伪探针：正常跑完会自清；进程被硬终止（SIGKILL / Ctrl-C）时会留下。
+# 不 ignore 的话，它会出现在 `git status` 里，有被误提交的风险。
+_tmp_probe*

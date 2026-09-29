@@ -7,6 +7,7 @@
     python cli.py view <debate_id>
     python cli.py chart <topic_id>
     python cli.py observe
+    python cli.py upper <debate_id> [propose|promote <谁>|name <ctx_id> <谁> "<名字>"]
 
 库文件默认 `arena.db`，用环境变量 `ARENA_DB` 换。
 要一份干净的先 `rm arena.db`，没有「重置」命令 —— 删文件就是重置。
@@ -32,6 +33,11 @@
   一个字都不写。理由：那是**用户离开了**还是**脚本出错了**，这里分不出来，
   分不出来就不许替它归因（`§C7.2` 的「中途放弃」要的是真放弃）。
   真要不提交，就在确认界面敲 `q` —— 那是明确的，会被记下来。
+- **上层归纳默认可跑，但在真实库上休眠。** `upper` 的判据是三个**结构性量**
+  （被质询 / 被修正 / 争议次数），现在的库太新，三个都是 0 ——
+  那是 `§C7.1` 预言的结果，不是失败。要看到东西得先有重复质询。
+- **上层节点没有「删除」入口**，也没有合并两个 `Context` 的动作。
+  `§C10` 只进不退，合并要新增结构而不是抹掉旧的。
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ import confirm
 import debate
 import observe
 import scaffold
+import upper
 import vote
 
 
@@ -239,6 +246,94 @@ def cmd_observe(conn: sqlite3.Connection, argv: list[str]) -> int:
     return 0
 
 
+def cmd_upper(conn: sqlite3.Connection, argv: list[str]) -> int:
+    """上层上下文：看（默认）/ 提议 / 建 / 命名（`§C7.1`）。
+
+        python cli.py upper <debate_id>                     # 只读，看现在有什么
+        python cli.py upper <debate_id> propose             # 只读，看**候选**
+        python cli.py upper <debate_id> promote <谁>        # 写：把候选建成节点
+        python cli.py upper <debate_id> name <ctx_id> <谁> "<名字>"
+
+    **默认是只读的**，这点和 `view` / `chart` / `observe` 一致 ——
+    要写就得把动作词说出来。理由：提议是**高频**动作（每次重算都会跑），
+    建是**低频**动作。默认写的话，跑几次就多出一堆节点，而
+    「不得不清理自动产出的垃圾」正是让人开始乱删结构的起点。
+
+    ⚠️ `promote` 建出来的节点**名字是空的**，必须由人来 `name` 一次。
+    这不是「还没实现自动命名」，是**这条设计能免确认的全部理由** ——
+    名字留空，系统就一句话都没说（`§C7.1` ③，见 `upper.py` 模块开头）。
+    """
+    if len(argv) <= 2:
+        raise scaffold.ScaffoldError(
+            "缺参数。\n用法：python cli.py upper <debate_id> [propose|promote <谁>"
+            "|name <ctx_id> <谁> \"<名字>\"]")
+    debate_id, action = argv[2], (argv[3] if len(argv) > 3 else "view")
+
+    if action == "view":
+        print(upper.render(conn, debate_id))
+        return 0
+
+    if action == "propose":
+        out = upper.propose_clusters(conn)
+        print(f"上层候选（规则集 {out['version']}）—— **只读**，一个字都没写")
+        print()
+        print("三个结构量（`§C7.1` 白名单，不含任何热度类信号）：")
+        for k, counts in out["count_signals"].items():
+            top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+            shown = "、".join(f"{t}×{n}" for t, n in top) if top else "（空）"
+            print(f"    {k:<18} {len(counts)} 个目标   {shown}")
+        print()
+        if not out["candidates"]:
+            # 空结果**永远附一句话**（同 `hints.scan()` 的规矩）
+            print("候选：0 条。")
+            print()
+            print("⚠️ 「还没有」和「算不出来」不是一回事：")
+            for b in upper.BLIND_SPOTS:
+                print(f"    · {b}")
+            return 0
+        print(f"候选：{len(out['candidates'])} 条")
+        for c in out["candidates"]:
+            print(f"    [{c['signal']}] 依据 {len(c['evidence_ids'])} 条："
+                  f"{c['evidence_ids']}")
+            print(f"         名字：{c['name']}（由人来给 —— 系统一个字都没说）")
+        print()
+        print(f"要建的话：python cli.py upper {debate_id} promote <谁>")
+        return 0
+
+    if action == "promote":
+        if len(argv) <= 4:
+            raise scaffold.ScaffoldError(
+                "缺「谁」。\n用法：python cli.py upper <debate_id> promote <谁>")
+        out = upper.propose_clusters(conn)
+        if not out["candidates"]:
+            print("没有候选可建 —— 底层的结构性信号还没攒够（见 upper.py 的 BLIND_SPOTS）。")
+            return 0
+        # 建之前把**将要发生的事**说清楚，不要静默写库
+        print(f"将建立 {len(out['candidates'])} 个上层节点，名字**全部留空**。")
+        print("这只影响「排序 / 默认展开 / 候选」，不改底层任何一个字。")
+        made = upper.promote_candidates(
+            conn, candidates=out["candidates"], by=argv[4], debate_id=debate_id)
+        print()
+        print(f"已建：{'、'.join(made)}")
+        print("它们现在**没有名字** —— 起名之前，节点上只有它的依据，没有一句话。")
+        print("下一步：给它们起名")
+        for cid in made:
+            print(f"    python cli.py upper {debate_id} name {cid} <谁> \"<名字>\"")
+        return 0
+
+    if action == "name":
+        if len(argv) <= 6:
+            raise scaffold.ScaffoldError(
+                "缺参数。\n用法：python cli.py upper <debate_id> name <ctx_id> <谁> \"<名字>\"")
+        rev = upper.rename_context(conn, context_id=argv[4], name=argv[6], by=argv[5])
+        print(f"已改名：「{argv[6]}」")
+        print(f"走 revise（不覆盖）—— 版本 {rev}。旧名留在版本表里。")
+        return 0
+
+    raise scaffold.ScaffoldError(
+        f"不认识的动作 {action!r}。可选：view / propose / promote / name")
+
+
 COMMANDS = {
     "new": cmd_new,
     "submit": cmd_submit,
@@ -247,6 +342,7 @@ COMMANDS = {
     "view": cmd_view,
     "chart": cmd_chart,
     "observe": cmd_observe,
+    "upper": cmd_upper,
 }
 
 

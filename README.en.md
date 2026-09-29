@@ -23,8 +23,13 @@ Starting with what it doesn't do, because that explains the system better than a
 - **Not a finished product.** It is a **chain that runs end to end**, not a service —
   no frontend, no accounts, no deployment, no database server.
 - **No ranking axis, no thresholds, no scores.** These aren't "not done yet", they are
-  **forbidden** (`§C7.1` `§C9` #5 #7), and 13 executable checks enforce that.
-- **No upper-layer summarization, no auto-split, no auto-merge.** Dormant for this entire phase (`§C7.1`).
+  **forbidden** (`§C7.1` `§C9` #5 #7), and 15 executable checks enforce that.
+- **No auto-split, no auto-merge.** Forbidden (`§C12.5` `§C9` #9).
+- **The upper layer derives, never flows down.** It can surface things that have been
+  repeatedly challenged — but **it may never write into any lower-layer field**
+  (`§C7.1` ④, guarded by both B14 and behavioural tests). Nodes are created
+  automatically, but **the name must come from a human** — the system says nothing on
+  your behalf (B15).
 
 ## Step 0: get the code
 
@@ -44,7 +49,22 @@ python cli.py confirm debate-0001 draft-0001 alice   # asks one at a time
 python cli.py view debate-0001
 python cli.py chart topic-0001     # vote chart (terminal Braille line plot)
 python cli.py observe
+python cli.py upper debate-0001    # upper-layer contexts (read-only by default)
 ```
+
+`upper` requires you to name the action to write anything (same rule as
+`view` / `chart` / `observe`):
+
+```bash
+python cli.py upper debate-0001 propose          # read-only: list candidates
+python cli.py upper debate-0001 promote alice    # write: create nodes (**name left empty**)
+python cli.py upper debate-0001 name ctx-0001 alice "Disagreement over assumption X"
+```
+
+**Why a human must supply the name**: that sentence — "this cluster is called X" —
+is the *entire* content of the assertion the upper layer would be making. Leave the name
+empty and the system has said nothing at all — which is precisely what lets it skip the
+approval flow (`§C7.1` ③).
 
 The DB defaults to `arena.db` (override with `ARENA_DB`). Bare `python cli.py` prints usage.
 
@@ -71,6 +91,15 @@ plus an "open a discussion" box — not a stack trace.
 | Reword and resubmit | `cli.py rewrite` |
 | Record "not submitting" | typing `q` at the prompt |
 | Read debates / observation points / tallies | `cli.py view` / `observe` / `chart` |
+| **Read the upper context** (read-only) | `cli.py upper` |
+
+The debate page carries an "**upper context →**" entry at the top. It only affects
+**display order / default expansion / suggested candidates**; it says nothing about
+whether any proposition is *right*, and writes not a single byte back into the lower
+layer (`§C7.1` ④). That page prints **"not yet"** and **"cannot be computed"** as two
+separate sentences — the first means the lower-layer signals have not accumulated
+enough, the second means this module cannot see a given kind of signal. Merging them
+into one sentence would be a lie.
 
 **It is not a second write path.** Every action above merely *dispatches* the same
 functions in `debate.py` / `confirm.py` that `cli.py` calls. The evidence is concrete:
@@ -122,6 +151,45 @@ The confirmation step asks **one proposition at a time**: `y` = not distorted / 
 nothing is written at all. That's not friction; it's the step `§C5` names: this is where a user
 first sees "my one sentence actually contains three propositions".
 
+## Structure: one question, two stances, arguments underneath
+
+This layer was **added in this pass** (DECLARATION §21). The shape used to be
+`Debate → Topic → Claim` — one Topic per submitted passage. That had a flaw:
+**several passages supporting the same side got split into several side-by-side Topics,
+each invisible to the others.**
+
+Now the `§C4` tree is real:
+
+```
+Debate  Is online discussion getting more emotional?
+ └─ Topic topic-0009 (a real question)
+     ├─ Position pos-0001 "Yes, increasingly emotional"
+     │    ├─ Claim claim-0001 … (11)
+     │    └─ old Topic topic-0001/topic-0002/… (passage containers, 5)
+     └─ Position pos-0002 "No — the issues themselves are deeper"
+          ├─ Claim claim-0012 … (7)
+          └─ old Topic topic-0006/topic-0007/topic-0008 (3)
+```
+
+**Three things to be clear about:**
+
+1. **The old Topics are mounted, not moved.** All 8 originals are still there, now hung
+   under a Position. So "which passage does this claim come from" **is still queryable** —
+   a claim sits under both its `Topic` and its `Position` (`§C10` only adds, never removes).
+   You will see the same sentence twice in `cli.py view`; that is **correct**.
+2. **The machine does not pick your side.** The stance is yours, and "which side does this
+   claim support" needs world knowledge — it cannot be read off the words
+   ("algorithms amplify conflict" supports or opposes "discussion is getting more emotional"
+   depending on how the question is asked). The system **records** the grouping you give it;
+   it does not decide it (DECLARATION §21.4).
+3. **"Two sides" is usage, not a limit.** `§C12.5` states in so many words that the data
+   structure **must not hardcode a binary** — it holds `A / B / C / D` fine. Two is used now
+   only because the data is still small.
+
+**A vote is cast on a stance.** Topics with Positions vote on `pos-*`; older Topics with no
+Position fall back to voting on `claim-*` and **still work**. So this layer is an
+**increment**, not a breaking change.
+
 ## Running the checks
 
 ```bash
@@ -161,6 +229,7 @@ Following `§T2` in order, **no skipping steps**.
 | 12 Introduce a mature fix | Done — let SQLite allocate atomically (`next_seq`), **not by adding a lock** |
 | 13/14 Fix it / run again | Done — the colliding parameters went from 1/4/10 collisions to 0; pushed to 8 processes × 12 rounds, still 0 |
 | 15 Five ontology gaps exposed by the label file | Done — all five concluded. Also **not one of the 14 steps** |
+| — Stance layer (question → stance → argument) | Done — 2026-09-27. **Not one of the 14 steps**; added by the requester on site, see DECLARATION §21 |
 
 Steps 10–14 are done, but **two things are unresolved — don't read that as "concurrency is fine now"**:
 
@@ -199,14 +268,15 @@ required writing Python — that's *having no product surface*, not "no frontend
 | `DECLARATION.md` | The selection declaration (`§T4.2`) — every choice together with its falsification check |
 | `cli.py` | **The human-facing side.** Thin: only calls existing actions, adds no write path |
 | `scaffold.py` | **Scaffold layer**: Artifact / Relation / Revision. Knows nothing about users, votes, or disagreement |
-| `debate.py` | **Arena layer**: discussion behaviour. One-way dependency, `uses` Scaffold |
+| `debate.py` | **Arena layer**: discussion behaviour. The `§C4` tree `Topic → Position/Claim → Evidence`. One-way dependency, `uses` Scaffold. The stance layer (`open_positions` / `assign_stance`) **records the grouping a human gives it; it does not decide**, see DECLARATION §21.4 |
 | `segment.py` | Deterministic rule-based splitter. **No semantic rewriting** — proposition text is always a verbatim slice |
 | `confirm.py` | Semantic confirmation (`§C5`). Confirms **whether the meaning was distorted**, not which spans enter the structure |
 | `observe.py` | Observation points (`§C7.2`). **Records how to compute, never what counts as "high"**. Derived view, read-only |
 | `hints.py` | `§C2.1` sub-question hints. **Discovers, never proposes** — points back at questions the user already wrote |
 | `vote.py` | Voting (`§C12`). Four quantities kept separate, **never combined by any operator**. `chart()` is a read-only derived view |
+| `upper.py` | **Upper-layer contexts (`§C7.1`)**: **derives, never flows down.** Signals are strictly **structural counts** (times challenged / revised / disputed) — **no popularity-class signal is read**. Nodes are auto-created, but **names come from humans**; the empty name is what lets them skip approval. See DECLARATION §22 |
 | `concurrency.py` | The step-10 apparatus. N real processes, **no coordination**, product API only (B9 watches this) |
-| `checks.py` | The executable falsification checks B1–B13 (`§T4.2`) |
+| `checks.py` | The executable falsification checks B1–B15 (`§T4.2`) |
 | `_console.py` | Keeps output independent of the environment's code page. On Windows `python` defaults to cp1252, where printing Chinese crashes — **and that exit code looks exactly like "a check fired"** (DECLARATION §18) |
 | `test_arena.py` | Structure and invariant tests |
 | `test_cli.py` | Entry-point tests. **Exercises the product surface**: subprocess + real stdin, never imports the library to "simulate" a user |
@@ -229,8 +299,14 @@ They live in the storage layer. There is no second write path:
 
 ## What this repo deliberately does not do
 
-No ranking, no scoring, no locking, no thresholds, no upper-layer summarization.
+No ranking, no scoring, no locking, no thresholds, no **automatic** summarization
+(the upper layer only derives — see below).
 See `DECLARATION.md` §4 — these are not omissions, they are required by `§C11.2` `§C7.1` `§C7.2`.
+
+**The upper layer does one thing only**: it surfaces shapes that have **already recurred**
+in the lower layer. It **cannot read** any popularity-class signal (B4), **cannot write**
+into any lower-layer field (B14), and **cannot name** anything (B15). Nodes may be created
+automatically; names must come from a human — see `DECLARATION.md` §22.
 
 **There are exactly three permitted derived views.** All read-only, none writes back, none creates objects:
 

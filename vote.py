@@ -85,6 +85,36 @@ TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 CONDITION_FIELDS = ("sampling", "prior_results_visible", "repeat_participation")
 
 
+def _votable_options(conn: sqlite3.Connection, topic_id: str) -> list:
+    """这个 Topic 上可投的选项。
+
+    **优先用立场（`§C4` 的 `Position`）**，没有立场才回退到 Claim。
+    需求方 2026-09-27：「投一张票投的是两个 Position」——
+    投立场才是真正的二元对立；投某一句具体的话，投的是论据，不是立场。
+
+    回退那一条**不能删**：既有数据（Topic 直挂 Claim）没有立场节点，
+    那些 Topic 照样要能投。这也让本层是**增量**而非破坏性改动。
+
+    ⚠️ **不假设只有两个。** `§C12.5` 明文「数据结构**禁止写死二元**」，
+    要能承载 `A / B / C / D`。这里只做「取全部」，一个字都没写死个数。
+    """
+    positions = conn.execute(
+        "SELECT a.id FROM relation r JOIN artifact a ON a.id = r.to_id"
+        " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
+        "   AND a.type = 'Position' ORDER BY a.id",
+        (topic_id,),
+    ).fetchall()
+    if positions:
+        return [p["id"] for p in positions]
+    claims = conn.execute(
+        "SELECT a.id FROM relation r JOIN artifact a ON a.id = r.to_id"
+        " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
+        "   AND a.type = 'Claim' ORDER BY a.id",
+        (topic_id,),
+    ).fetchall()
+    return [c["id"] for c in claims]
+
+
 def vote_context(conn: sqlite3.Connection, topic_id: str) -> dict:
     """**渲染那一刻**的问题版本与论点版本（`§C12.3`）。
 
@@ -96,20 +126,15 @@ def vote_context(conn: sqlite3.Connection, topic_id: str) -> dict:
     所以这里照实给出 `heads`，由 `cast_vote()` 拒绝投票并说明原因。
     """
     heads = heads_of(conn, topic_id)
-    claims = conn.execute(
-        "SELECT a.id FROM relation r JOIN artifact a ON a.id = r.to_id"
-        " WHERE r.from_id = ? AND r.kind = 'contains' AND r.state = 'active'"
-        "   AND a.type = 'Claim' ORDER BY a.id",
-        (topic_id,),
-    ).fetchall()
+    options = _votable_options(conn, topic_id)
     return {
         "topic": topic_id,
         "question_version": heads[0]["id"] if len(heads) == 1 else None,
         "question_heads": [h["id"] for h in heads],
         "argument_version": {
-            c["id"]: (heads_of(conn, c["id"])[0]["id"]
-                      if len(heads_of(conn, c["id"])) == 1 else None)
-            for c in claims
+            o: (heads_of(conn, o)[0]["id"]
+                if len(heads_of(conn, o)) == 1 else None)
+            for o in options
         },
     }
 

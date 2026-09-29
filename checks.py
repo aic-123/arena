@@ -55,8 +55,19 @@ CHECKS = [
      r"weight|score|rank|truth", "§C6.1 §C9 #4 #5 #7"),
     ("B3", "不实现自动分裂 / 自动合并 / 阈值",
      r"auto_split|auto_merge|threshold", "§C12.5 §C9 #9"),
-    ("B4", "不做上层归纳（§C7.1 明示 MVP 全程休眠）",
-     r"consensus|cluster|emergence", "§C7.1 §C9 #5"),
+    # ⚠️ B4 收窄过一次（2026-09-27）。原判据 `consensus|cluster|emergence`
+    # 抓的是「有没有实现上层归纳」——`§C7.1` 当年说 MVP 全程休眠，
+    # 所以「出现这些词」就等于「越界」。需求方 2026-09-27 授权把上层**打开**，
+    # 休眠前提没了，原判据就变成误报（它会把合规实现一起打掉）。
+    #
+    # 收窄时必须**只对准上层**，不能全仓扫：`tally` / `vote_count` 在
+    # `vote.py` 里是正当的（投票本来就该数票）。所以这条只扫 `upper.py`，
+    # 判据是「**上层归纳的信号不许是热度类**」。
+    # 全仓那条在 B2（无权重/评分/名次/真值），两条不重叠。
+    ("B4", "上层归纳不读热度类信号（`vote.py` 数票是正当的，不在此列）",
+     r"consensus|emergence|tally|vote_count|voted_count|public_preference"
+     r"|popular\w*|\bhot\b|trending|\bviews\b|exposure",
+     "§C7.1 §C9 #5", "upper.py"),
     ("B5", "无标量分",
      r"evidence_score|truth_score|total_score|verdict", "§C6.1 §C9 #7"),
     # `§T2` 第 12 步引入发号器之后新加的。它是 §C9 #10 的可执行形式：
@@ -114,11 +125,20 @@ def code_lines(path: Path):
         yield n, (line[:cut[n]] if n in cut else line).rstrip()
 
 
-def scan(pattern: str) -> list[tuple[str, int, str]]:
+def scan(pattern: str, only: str | None = None) -> list[tuple[str, int, str]]:
+    """全仓扫一条正则。`only` 给文件名时只扫那一个。
+
+    为什么要 `only`：有两条检查的**判据相同、适用范围不同**。
+    `tally` 在 `vote.py` 里是正当的（投票本来就该数票），
+    在 `upper.py` 里就是越界（上层归纳不许读热度）。全仓扫必然误报，
+    所以允许把范围缩到一个文件 —— 但**必须显式写出来**，不许默认缩。
+    """
     rx = re.compile(pattern, re.I)
     hits = []
     for path in sorted(ROOT.rglob("*.py")):
         if path.name in EXEMPT or "__pycache__" in path.parts:
+            continue
+        if only is not None and path.name != only:
             continue
         for line, text in code_lines(path):
             if rx.search(text):
@@ -314,6 +334,14 @@ _COORD = re.compile(r"\b(threading|multiprocessing|asyncio|Barrier|Semaphore)\b"
 # 所以路径提成常量，好让用例能单独钉住「这个文件真的在」。
 APPARATUS = ROOT / "concurrency.py"
 
+# 上层模块（`§C7.1`）。B14 / B15 扫它。
+#
+# 同样的理由提成常量：两条检查在**文件不存在**时都返回 `[]`（「暂不适用」），
+# 于是「上层是干净的」和「根本没有上层模块」长得一模一样，用例会**空过**。
+# 这正是 B9 上面那段注释记着的坑，B14 / B15 是同一个形状 ——
+# 所以它们的用例里都先单独钉住「这个文件真的在」。
+UPPER = ROOT / "upper.py"
+
 
 def check_apparatus_is_not_a_script(
     target: Path | None = None,
@@ -423,6 +451,75 @@ def check_proposition_type_is_not_hardcoded(
             if _HARDCODED_PROPOSITION_TYPE.search(line)]
 
 
+_UPPER_WRITES_DOWN = re.compile(
+    r"""\b(?:UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+(?:artifact|revision|relation)\b""",
+    re.IGNORECASE)
+
+
+def check_upper_does_not_write_down(
+    target: Path | None = None,
+) -> list[tuple[str, int, str]]:
+    """`§C7.1` ④ 单向性：**上层 → 底层，禁止写成事实**。
+
+    这是本仓库里最该机器守的一条，因为它**坏起来不像坏**：
+    上层归纳顺手把「这一簇很重要」写进底层的某个字段，
+    短期看一切正常（排序确实变好了），长期看**底层的真值被相关性判断污染了** ——
+    而那个污染不可追溯（底层字段没有「这是上层写的」这个标记）。
+
+    判据刻意做得**又笨又窄**：`upper.py` 里出现
+    `UPDATE artifact` / `INSERT INTO revision` / `DELETE FROM relation` 之类就报。
+
+    为什么只扫 `upper.py`：底层模块当然要写库（`scaffold.py` 就是干这个的）。
+    这条盯的是**上层那一侧不许自己动手**。
+
+    ⚠️ 它**不能**代替 `test_arena.py` 里那条行为验证。
+    静态扫只能拦「直接写 SQL」；走 `scaffold.revise()` 之类的**间接写**它看不见。
+    两条一起才是完整的：静态拦直笔，行为测试拦绕路。
+
+    `target` 可覆盖，为的是 `test_checks.py` 能注入探针证明它不空转。
+    """
+    target = target or (ROOT / "upper.py")
+    if not target.is_file():
+        return []                      # 还没有上层模块 —— 暂不适用，不是「过」
+    return [(target.name, n, line.strip())
+            for n, line in code_lines(target)
+            if _UPPER_WRITES_DOWN.search(line)]
+
+
+def check_upper_nodes_are_not_named_by_machine(
+    target: Path | None = None,
+) -> list[tuple[str, int, str]]:
+    """上层节点**不许带系统生成的名字** —— 这一条是本模块能免确认的全部理由。
+
+    需求方 2026-09-27 定的那一档：节点可以自动建，但**名字由人来给**。
+    因为「这一簇叫什么」那句话，系统自己说不出来（说了就是替用户立论，`§C2.0`）。
+    名字留空，系统就**一句话都没说**。
+
+    判据：`upper.py` 里给 `Content` 节点写 `text` 的地方，
+    不许出现 `PENDING_NAME` 之外的字符串字面量。
+
+    它盯的是最容易发生的那种退化：有人图省事，从依据里挑第一条命题
+    抄成名字 —— 那样节点自动带了一个系统选的名字，而**它看起来完全正常**。
+    """
+    target = target or (ROOT / "upper.py")
+    if not target.is_file():
+        return []
+    src = target.read_text(encoding="utf-8")
+    if 'type_=UPPER_TYPE' not in src:
+        return []                      # 还没建上层节点 —— 暂不适用
+    hits = []
+    for n, line in code_lines(target):
+        if "PENDING_NAME" in line:
+            continue
+        if _MACHINE_NAME_LITERAL.search(line):
+            hits.append((target.name, n, line.strip()))
+    return hits
+
+
+# 给上层节点的 `text` 赋一个写死的字符串字面量 = 系统给它起了名。
+_MACHINE_NAME_LITERAL = re.compile(r"""["']text["']\s*:\s*["'][^"']+["']""")
+
+
 def all_checks():
     """(编号, 说明, 条款, 返回命中的函数) —— **唯一的登记表**。
 
@@ -432,8 +529,10 @@ def all_checks():
     也就是说，将来它们变成空转，总账仍然是绿的。
     那正是这个文件要防的病。现在加一条检查只要改这一处。
     """
-    for code, what, pattern, clause in CHECKS:
-        yield code, what, clause, partial(scan, pattern)
+    for entry in CHECKS:
+        code, what, pattern, clause = entry[:4]
+        only = entry[4] if len(entry) > 4 else None
+        yield code, what, clause, partial(scan, pattern, only)
     yield "B6", "观测点只记不算——不拿它的值与任何数比较", "§C7.2 §T0.3", check_no_threshold
     yield "B7", "第三方依赖为零", "§T4.3 §T5", check_no_new_dependency
     yield "B8", "声明待标注的样本，标注区为空", "§C5.5.1", check_placeholder_not_annotated
@@ -445,6 +544,10 @@ def all_checks():
            "§T0.3 §C2.5 缺口②", check_proposition_type_is_not_hardcoded)
     yield ("B13", "标注区有值的样本，必须说清值是谁填的（B8 的另一半）", "§C5.5.1",
            check_annotated_samples_name_their_source)
+    yield ("B14", "上层 → 底层不许写成事实（单向性）", "§C7.1 ④",
+           check_upper_does_not_write_down)
+    yield ("B15", "上层节点不带系统生成的名字（命名归人）", "§C2.0 §C7.1 ③",
+           check_upper_nodes_are_not_named_by_machine)
 
 
 def main() -> int:

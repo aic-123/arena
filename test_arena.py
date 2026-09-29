@@ -25,6 +25,7 @@ import hints
 import observe
 import scaffold
 import segment
+import upper
 import vote
 from scaffold import ScaffoldError
 
@@ -1171,8 +1172,16 @@ class TestStep07EvidenceChallenge(Base):
                          ["contradicts", "supports"])
         # 用 `checks.py` 自己的规则来断言，而不是在这里另抄一份禁词 ——
         # 抄一份就会各自漂移，而这两处本该永远一致。
+        #
+        # ⚠️ 取前 4 个（`entry[:4]`），不整条 unpack。CHECKS 的元组现在**可以有第 5 个
+        # 元素**（B4 收窄时加的 `only` 文件范围，见 `checks.scan`）——
+        # 写死 `for a, b, c, d in CHECKS` 会在下一条带范围的检查出现时直接
+        # `ValueError: too many values to unpack`。**2026-09-27 实测就崩在这**：
+        # `checks.all_checks()` 早改成了 `entry[:4]`，这里漏改，于是
+        # 223 条里挂掉这 1 条。截断写法对「有没有第 5 个」不敏感。
         flat = json.dumps(c, ensure_ascii=False)
-        for code, what, pattern, _clause in checks.CHECKS:
+        for entry in checks.CHECKS:
+            code, what, pattern = entry[0], entry[1], entry[2]
             self.assertIsNone(re.search(pattern, flat, re.I),
                               f"只读视图里出现了 {code}（{what}）要挡的东西")
 
@@ -2143,6 +2152,718 @@ class TestVoteChart(Base):
         self.conn.commit()
         out = vote.chart(self.conn, empty, colour=False)
         self.assertIn("没有可画的东西", out)
+
+
+# ---------------------------------------------------------------------------
+# 立场层（`§C4` 的 `Topic ├── Position/Claim`）—— 需求方 2026-09-27
+# ---------------------------------------------------------------------------
+#
+# 这一层要证明的**不是**「功能能跑」，而是三条**边界**：
+#   1. 立场能建，且 id 前缀独立（`pos-NNNN`）—— 它是个真对象，不是 Topic 的别名。
+#   2. **机器不替用户归类。** `open_positions()` 建完立场，立场下面是空的。
+#   3. 二元是**用法**不是**约束** —— 数据层不许写死两个（`§C12.5`）。
+
+class TestStanceLayer(Base):
+    """`§C4` 的 `Topic → Position → Claim`。"""
+
+    def setUp(self):
+        super().setUp()
+        d = debate.open_debate(self.conn, question="网络讨论是不是越来越情绪化了？",
+                               by="需求方")
+        self.debate_id = d["debate"]
+        (self.topic, self.pro) = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id,
+            text="情绪化的一大原因是算法放大冲突内容。", by="甲")
+
+    def _open_pro_and_con(self):
+        return debate.open_positions(
+            self.conn, topic_id=self.topic, by="需求方",
+            stances=[{"text": "是，越来越情绪化了"},
+                     {"text": "不，是议题本身矛盾更深"}])
+
+    def _add_claim(self, text, by="甲"):
+        return _one_claim(self.conn, debate_id=self.debate_id, text=text,
+                          by=by, topic_id=self.topic)
+
+    # --- 1. 立场是个真对象 ------------------------------------------------
+
+    def test_a_position_is_a_real_artifact_with_its_own_prefix(self):
+        """`pos-NNNN` —— 前缀独立说明它**不是** Topic 的别名（`§C3.2`）。"""
+        made = self._open_pro_and_con()
+        self.assertEqual(len(made), 2)
+        for pid in made:
+            self.assertTrue(pid.startswith("pos-"), pid)
+            self.assertEqual(scaffold.get(self.conn, pid)["type"], "Position")
+        self.assertNotEqual(made[0], made[1], "两个立场拿到了同一个 id")
+
+    def test_opening_positions_does_not_move_any_claim(self):
+        """建立场**只建立场**。已有命题一条都不动。"""
+        before = debate.claims_of_position(self.conn, self.pro)
+        self._open_pro_and_con()
+        for pid in debate.stance_options(self.conn, self.topic):
+            self.assertEqual(
+                debate.claims_of_position(self.conn, pid["id"]), [],
+                "open_positions 偷偷把命题归类了 —— 那是机器替用户判断")
+        # 原来那条 `Topic contains Claim` 还在
+        self.assertEqual(
+            [c["id"] for c in self.conn.execute(
+                "SELECT a.id FROM relation r JOIN artifact a ON a.id = r.to_id"
+                " WHERE r.from_id=? AND r.kind='contains' AND r.state='active'"
+                "   AND a.type='Claim'", (self.topic,)).fetchall()],
+            [self.pro])
+        self.assertIsInstance(before, list)
+
+    def test_a_topic_without_positions_says_empty_not_broken(self):
+        """没有立场**不是错误** —— 既有数据（Topic 直挂 Claim）继续成立。"""
+        self.assertEqual(debate.stance_options(self.conn, self.topic), [])
+        v = debate.view(self.conn, self.debate_id)
+        self.assertEqual(v["topics"][0]["positions"], [])
+        # 旧形状仍在：那一条命题还挂在 Topic 下
+        self.assertEqual(len(v["topics"][0]["claims"]), 1)
+
+    # --- 2. 机器不替用户归类 ----------------------------------------------
+
+    def test_assign_stance_requires_a_human_decision(self):
+        """`assign_stance()` 的归类**必须由调用方给出**。
+
+        它**不检查**「这条命题是否真的支持那个立场」—— 判断那个要世界知识，
+        `§T0.3` 不许规则引擎自决。所以本函数能做的只有：**照给的挂上去**。
+        反面：它也不许自己挑一个立场把命题塞进去。
+        """
+        pro_id, con_id = self._open_pro_and_con()
+        debate.assign_stance(self.conn, claim_id=self.pro, position_id=pro_id,
+                             by="甲")
+        # 只有被点名的那一个立场拿到了命题
+        self.assertEqual(debate.claims_of_position(self.conn, pro_id), [self.pro])
+        self.assertEqual(debate.claims_of_position(self.conn, con_id), [])
+
+    def test_assigning_stance_adds_an_edge_and_does_not_remove_the_old_one(self):
+        """`§C10` 只进不退 + **并挂而非搬家**。
+
+        挂到立场是**多一层归属**：原来那条 `Topic contains Claim`
+        一个字都不许删 —— 「命题属于哪段原文」这件既定事实还查得到。
+        """
+        pro_id, _ = self._open_pro_and_con()
+        debate.assign_stance(self.conn, claim_id=self.pro, position_id=pro_id,
+                             by="甲")
+
+        def _edges_from(frm):
+            return [(r["kind"], r["to_id"]) for r in self.conn.execute(
+                "SELECT kind, to_id FROM relation WHERE from_id=? AND state='active'",
+                (frm,)).fetchall()]
+
+        self.assertIn(("contains", self.pro), _edges_from(pro_id),
+                      "立场下没有命题边")
+        self.assertIn(("contains", self.pro), _edges_from(self.topic),
+                      "并挂变成了搬家 —— 旧的 Topic contains Claim 被删了")
+
+    def test_assigning_the_same_stance_twice_does_not_duplicate(self):
+        """同一条命题挂到同一个立场两次不产生第二条边（幂等）。"""
+        pro_id, _ = self._open_pro_and_con()
+        debate.assign_stance(self.conn, claim_id=self.pro, position_id=pro_id,
+                             by="甲")
+        debate.assign_stance(self.conn, claim_id=self.pro, position_id=pro_id,
+                             by="甲")
+        n = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM relation WHERE kind='contains'"
+            "   AND from_id=? AND to_id=? AND state='active'",
+            (pro_id, self.pro)).fetchone()["n"]
+        self.assertEqual(n, 1)
+
+    def test_assign_stance_refuses_the_wrong_types(self):
+        """传错 id 要**报错**，不能静默挂上去。"""
+        pro_id, _ = self._open_pro_and_con()
+        with self.assertRaises(ScaffoldError):
+            debate.assign_stance(self.conn, claim_id=pro_id, position_id=pro_id,
+                                 by="甲")          # 拿 Position 当 Claim
+        with self.assertRaises(ScaffoldError):
+            debate.assign_stance(self.conn, claim_id=self.pro, position_id=self.topic,
+                                 by="甲")          # 拿 Topic 当 Position
+
+    def test_a_view_shows_the_position_layer_separately_from_direct_claims(self):
+        """`view()` 的 `positions` 与 `claims` 是**两个键**，不许合并。
+
+        `claims` 是旧形状（Topic 直挂），`positions` 是新形状。
+        并挂意味着同一条命题**两个键里都在** —— 那是正确的，不是重复。
+        """
+        pro_id, con_id = self._open_pro_and_con()
+        other = self._add_claim("情绪化是平台推荐机制造成的。", by="乙")
+        debate.assign_stance(self.conn, claim_id=self.pro, position_id=pro_id,
+                             by="甲")
+        debate.assign_stance(self.conn, claim_id=other, position_id=con_id,
+                             by="乙")
+
+        t = debate.view(self.conn, self.debate_id)["topics"][0]
+        self.assertEqual({p["position"]["id"] for p in t["positions"]},
+                         {pro_id, con_id})
+        # 两个键都在，且都是命题明细（不是 id 字符串）
+        self.assertEqual([c["claim"]["id"] for c in t["claims"]],
+                         [self.pro, other])
+        got = {p["position"]["id"]: [c["claim"]["id"] for c in p["claims"]]
+               for p in t["positions"]}
+        self.assertEqual(got[pro_id], [self.pro])
+        self.assertEqual(got[con_id], [other])
+
+    def test_a_claim_detail_is_the_same_shape_in_both_places(self):
+        """同一条命题在 `Topic` 下和 `Position` 下的明细**键集相同**。
+
+        抽 `_claim_detail()` 就是为了这个：两处各写一遍，以后加一条边必然只改一处。
+        """
+        pro_id, _ = self._open_pro_and_con()
+        debate.assign_stance(self.conn, claim_id=self.pro, position_id=pro_id,
+                             by="甲")
+        t = debate.view(self.conn, self.debate_id)["topics"][0]
+        via_topic = [c for c in t["claims"] if c["claim"]["id"] == self.pro][0]
+        via_pos = [c for c in t["positions"][0]["claims"]
+                   if c["claim"]["id"] == self.pro][0]
+        self.assertEqual(set(via_topic), set(via_pos))
+
+    # --- 3. 二元是用法，不是约束 -------------------------------------------
+
+    def test_the_data_layer_is_not_hardcoded_to_two_positions(self):
+        """`§C12.5`：数据结构**禁止写死二元**。四个立场得住。
+
+        MVP 用二元对立是**用法**，不是**约束** —— 数据量大了要能扩成分叉。
+        """
+        made = debate.open_positions(
+            self.conn, topic_id=self.topic, by="需求方",
+            stances=[{"text": t} for t in ("完全同意", "部分同意", "部分反对", "完全反对")])
+        self.assertEqual(len(made), 4)
+        self.assertEqual(len(debate.stance_options(self.conn, self.topic)), 4)
+
+    def test_positions_cannot_be_opened_twice_on_the_same_topic(self):
+        """已建过立场再建会**报错**并指向 revise（`§C10` 不覆盖）。"""
+        self._open_pro_and_con()
+        with self.assertRaises(ScaffoldError) as cm:
+            debate.open_positions(self.conn, topic_id=self.topic, by="需求方",
+                                  stances=[{"text": "又来一个"}])
+        self.assertIn("revise", str(cm.exception))
+
+    def test_an_empty_stance_list_is_refused(self):
+        with self.assertRaises(ScaffoldError):
+            debate.open_positions(self.conn, topic_id=self.topic, by="需求方",
+                                  stances=[])
+        with self.assertRaises(ScaffoldError):
+            debate.open_positions(self.conn, topic_id=self.topic, by="需求方",
+                                  stances=[{"text": "   "}])
+
+    def test_opening_positions_on_a_non_topic_is_refused(self):
+        with self.assertRaises(ScaffoldError):
+            debate.open_positions(self.conn, topic_id=self.pro, by="需求方",
+                                  stances=[{"text": "赞成"}, {"text": "反对"}])
+
+
+class TestVoteOnPositions(Base):
+    """投票挂到立场上（需求方 2026-09-27：「投两个 Position」）。"""
+
+    def setUp(self):
+        super().setUp()
+        d = debate.open_debate(self.conn, question="网络讨论是不是越来越情绪化了？",
+                               by="需求方")
+        self.debate_id = d["debate"]
+        (self.topic, self.c1) = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id, text="是，越来越情绪化了。", by="甲")
+        self.c2 = _one_claim(self.conn, debate_id=self.debate_id,
+                             text="算法放大冲突内容。", by="乙", topic_id=self.topic)
+        made = debate.open_positions(
+            self.conn, topic_id=self.topic, by="需求方",
+            stances=[{"text": "是，越来越情绪化了"},
+                     {"text": "不，是议题本身矛盾更深"}])
+        self.pro, self.con = made
+        debate.assign_stance(self.conn, claim_id=self.c1, position_id=self.pro,
+                             by="甲")
+        debate.assign_stance(self.conn, claim_id=self.c2, position_id=self.con,
+                             by="乙")
+
+    def _vote(self, choice, by):
+        vote.cast_vote(self.conn, topic_id=self.topic, choice=choice, by=by,
+                       seen=vote.vote_context(self.conn, self.topic),
+                       sampling="half-random", prior_results_visible=False,
+                       repeat_participation=False)
+
+    def test_the_options_are_the_positions_not_the_claims(self):
+        """有立场时**投的是立场**。投某一句具体的话投的是论据，不是立场。"""
+        ctx = vote.vote_context(self.conn, self.topic)
+        self.assertEqual(set(ctx["argument_version"]), {self.pro, self.con})
+        self.assertNotIn(self.c1, ctx["argument_version"])
+
+    def test_it_falls_back_to_claims_when_there_are_no_positions(self):
+        """回退那一条**不能删** —— 既有数据没有立场，那些 Topic 照样要能投。
+
+        这条让本层是**增量**而非破坏性改动。
+        """
+        d2 = debate.open_debate(self.conn, question="另一个问题？", by="需求方")
+        topic2, a = _topic_and_first_claim(
+            self.conn, debate_id=d2["debate"], text="甲方的说法。", by="甲")
+        ctx = vote.vote_context(self.conn, topic2)
+        self.assertEqual(set(ctx["argument_version"]), {a})
+
+    def test_voting_on_a_position_records_that_position_version(self):
+        """票记的 `argument_version` 是**立场那一版**的 revision id（`§C12.3`）。"""
+        self._vote(self.pro, "u1")
+        vid = self.conn.execute(
+            "SELECT id FROM artifact WHERE type='Vote'").fetchone()["id"]
+        c = scaffold.content_of(self.conn, vid)
+        self.assertEqual(set(c["argument_version"]), {self.pro, self.con})
+        self.assertEqual(c["question_version"],
+                         scaffold.heads_of(self.conn, self.topic)[0]["id"])
+
+    def test_the_number_of_options_is_whatever_exists_not_two(self):
+        """`§C12.5` 在**投票这一层**再钉一次：四个立场 = 四个可投选项。"""
+        debate.open_positions  # 已建过，改用第二个 Topic 来验四选项
+        d2 = debate.open_debate(self.conn, question="四选项问题？", by="需求方")
+        topic2, _ = _topic_and_first_claim(
+            self.conn, debate_id=d2["debate"], text="第一句。", by="甲")
+        made = debate.open_positions(
+            self.conn, topic_id=topic2, by="需求方",
+            stances=[{"text": t} for t in ("A", "B", "C", "D")])
+        ctx = vote.vote_context(self.conn, topic2)
+        self.assertEqual(set(ctx["argument_version"]), set(made))
+        self.assertEqual(len(ctx["argument_version"]), 4)
+
+    def test_a_vote_can_still_not_name_an_option_it_did_not_see(self):
+        """换成立场之后，防线不变：没在选项里的 id 照拒。"""
+        with self.assertRaises(ScaffoldError):
+            self._vote(self.c1, "u1")
+
+    def test_the_tally_groups_by_the_option_it_was_given(self):
+        """票落在立场上，计数就按立场分。"""
+        self._vote(self.pro, "u1")
+        self._vote(self.con, "u2")
+        self._vote(self.con, "u3")
+        g = vote.tally(self.conn, self.topic)["public_preference"][0]
+        self.assertEqual(g["options"], {self.con: 2, self.pro: 1})
+
+
+class TestStanceLayerRendering(Base):
+    """结构落了库但**界面上看不见** = 等于没做。这一节钉渲染。"""
+
+    def setUp(self):
+        super().setUp()
+        d = debate.open_debate(self.conn, question="网络讨论是不是越来越情绪化了？",
+                               by="需求方")
+        self.debate_id = d["debate"]
+        (self.topic, self.c1) = _topic_and_first_claim(
+            self.conn, debate_id=self.debate_id, text="是，越来越情绪化了。", by="甲")
+        made = debate.open_positions(
+            self.conn, topic_id=self.topic, by="需求方",
+            stances=[{"text": "是，越来越情绪化了"},
+                     {"text": "不，是议题本身矛盾更深"}])
+        debate.assign_stance(self.conn, claim_id=self.c1, position_id=made[0],
+                             by="甲")
+        self.pro, self.con = made
+
+    def test_cli_render_prints_the_positions(self):
+        """`debate.render()` 必须印立场 —— 不然 `cli.py view` 里什么都看不到。"""
+        out = debate.render(self.conn, self.debate_id)
+        self.assertIn(self.pro, out)
+        self.assertIn("是，越来越情绪化了", out)
+        self.assertIn("不，是议题本身矛盾更深", out)
+
+    def test_cli_render_shows_a_claim_under_its_position(self):
+        """命题要出现在**它所属的立场**那一节里，不是只出现在 Topic 下面。"""
+        out = debate.render(self.conn, self.debate_id)
+        self.assertIn(self.c1, out)
+        # 立场那一节里得有它
+        sec = out.split(self.pro, 1)[1]
+        self.assertIn(self.c1, sec.split("⚠️", 1)[0])
+
+    def test_cli_render_says_so_when_a_topic_has_no_positions(self):
+        """没有立场的老 Topic 照常印（印的是直挂的命题），不留空壳标题。"""
+        d2 = debate.open_debate(self.conn, question="老形状？", by="需求方")
+        topic2, c = _topic_and_first_claim(
+            self.conn, debate_id=d2["debate"], text="没有立场的一句话。", by="甲")
+        out = debate.render(self.conn, d2["debate"])
+        self.assertIn(c, out)
+        self.assertNotIn("pos-", out)
+
+    def test_web_render_prints_the_positions(self):
+        """`serve.render_debate()` 同样必须印 —— 这是产品上真正被看的那一面。"""
+        import serve
+        html = serve.render_debate(self.conn, self.debate_id)
+        self.assertIn(self.pro, html)
+        self.assertIn("是，越来越情绪化了", html)
+        self.assertIn(self.c1, html)
+
+    def test_web_render_does_not_merge_positions_into_direct_claims(self):
+        """网页上立场与直挂命题**分区**，不许混成一堆卡片。"""
+        import serve
+        html = serve.render_debate(self.conn, self.debate_id)
+        self.assertIn("立场", html)
+
+
+class TestUpperLayerIsOneWay(Base):
+    """`§C7.1` 上层归纳：**只派生，不倒流**。
+
+    这个类里全是**行为**验证 —— 静态那半在 `checks.py` 的 B14（拦直笔），
+    这里拦绕路：走 `scaffold.revise()` 之类的间接写，B14 的正则看不见。
+
+    两层加起来才完整。`upper.py` 的 `check_upper_does_not_write_down` 的
+    docstring 里明说了这条分工。
+    """
+
+    def setUp(self):
+        super().setUp()
+        confirm.ensure_schema(self.conn)
+        self.debate = debate.open_debate(
+            self.conn, question="该不该 A？", by="alice")["debate"]
+
+    def _challenged_claim(self, *, n=3, text="假设甲") -> str:
+        """造一条**已被质询 n 次**的命题，走真路（逐条确认）。"""
+        claim = _one_claim(self.conn, debate_id=self.debate, text=text, by="alice")
+        for i in range(n):
+            c = scaffold.add_artifact(
+                self.conn, type_="Counterargument",
+                content={"text": f"反驳{i}"}, origin="bob")
+            scaffold.activate(self.conn, c, by="bob")
+            scaffold.add_relation(self.conn, kind="challenged_by",
+                                  from_id=claim, to_id=c, origin="bob")
+        return claim
+
+    # --- 底层快照：单向性的地基 ------------------------------------------
+    def _lower_snapshot(self, ids: list[str]) -> dict:
+        q = ",".join("?" * len(ids))
+        return {
+            "rev": sorted(map(tuple, self.conn.execute(
+                f"SELECT id, artifact_id, parent_rev, content FROM revision"
+                f" WHERE artifact_id IN ({q})", ids).fetchall())),
+            "state": sorted(map(tuple, self.conn.execute(
+                f"SELECT id, state FROM artifact WHERE id IN ({q})", ids).fetchall())),
+        }
+
+    def _challenger_ids(self, claim: str) -> list[str]:
+        return [r[0] for r in self.conn.execute(
+            "SELECT to_id FROM relation WHERE from_id=? AND kind='challenged_by'",
+            (claim,))]
+
+    # --- ① propose 是纯读 -----------------------------------------------
+    def test_propose_writes_nothing_at_all(self):
+        """提议是**只读**的。一个字都不许写 —— 连事件都不该多。
+
+        「提议」是高频动作（每次重算都会跑），「建」是低频动作。
+        混在一起的话，每次重算都会多出一批节点；而「不得不清理自动产出的垃圾」
+        正是让人开始乱删结构的起点（`upper.propose_clusters` 的 docstring）。
+        """
+        claim = self._challenged_claim()
+        ids = [claim] + self._challenger_ids(claim)
+        before = self._lower_snapshot(ids)
+        n_art = self.conn.execute("SELECT COUNT(*) FROM artifact").fetchone()[0]
+        n_rel = self.conn.execute("SELECT COUNT(*) FROM relation").fetchone()[0]
+        n_rev = self.conn.execute("SELECT COUNT(*) FROM revision").fetchone()[0]
+
+        out = upper.propose_clusters(self.conn)
+        self.assertTrue(out["candidates"], "造了 3 次质询却没出候选 —— 用例没测到东西")
+
+        self.assertEqual(self._lower_snapshot(ids), before, "propose 动了底层")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM artifact").fetchone()[0], n_art)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM relation").fetchone()[0], n_rel)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM revision").fetchone()[0], n_rev)
+
+    # --- ② promote 只加不删、只写上层 ------------------------------------
+    def test_promote_never_touches_the_lower_layer(self):
+        """`§C7.1` ④ 的可执行形式：**底层一字不少，一条没改。**
+
+        这条是「上层 → 底层，禁止写成事实」最直接的行为证据。
+        """
+        claim = self._challenged_claim()
+        ids = [claim] + self._challenger_ids(claim)
+        before = self._lower_snapshot(ids)
+        rel_before = {r[0] for r in self.conn.execute("SELECT id FROM relation")}
+
+        cands = upper.propose_clusters(self.conn)
+        made = upper.promote_candidates(
+            self.conn, candidates=cands["candidates"], by="alice",
+            debate_id=self.debate)
+
+        self.assertTrue(made, "没建出任何上层节点")
+        # 底层内容 / 状态 / 版本 **逐字节相同**
+        self.assertEqual(self._lower_snapshot(ids), before,
+                         "promote 改了底层（内容 / 状态 / 版本）")
+        # 底层**原来的边一条没删**
+        rel_after = {r[0] for r in self.conn.execute("SELECT id FROM relation")}
+        self.assertTrue(rel_before <= rel_after,
+                        f"promote 删了底层边：{rel_before - rel_after}")
+        # 新增的边**只有** upper 那一种
+        added_kinds = {r[0] for r in self.conn.execute(
+            "SELECT DISTINCT kind FROM relation "
+            "WHERE id NOT IN (%s)" % ",".join(map(str, rel_before)))}
+        self.assertTrue(
+            added_kinds <= {"clustered_into", "contains"},
+            f"promote 加了 {upper.UPPER_RELATION} / contains 之外的边："
+            f"{added_kinds} —— 上层不许往底层加真值边")
+        # 而 `contains` 那条**必须**是 Debate → Context（挂上去），
+        # 不是从底层命题指过去 —— 那才是「往底层加真值边」。
+        anchor_kinds = {r[0] for r in self.conn.execute(
+            "SELECT DISTINCT kind FROM relation "
+            "WHERE id NOT IN (%s)" % ",".join(map(str, rel_before)))}
+        self.assertIn("contains", anchor_kinds)
+        ctx = made[0]
+        anchor = self.conn.execute(
+            "SELECT from_id, to_id FROM relation"
+            " WHERE kind='contains' AND to_id=?", (ctx,)).fetchone()
+        self.assertEqual(anchor["from_id"], self.debate,
+                         "contains 边的起点不是 Debate —— 上层节点挂错地方了")
+
+    def test_promote_refuses_evidence_that_is_not_active_yet(self):
+        """⚠️ 硬检查：**上层归纳不许把「未确认」提拔成「已确认」。**
+
+        那是确认环节的权力（`§C2.5` 第 2 档）。这是本模块最危险的那种越权 ——
+        它看起来只是「顺手把这条也并进去」，实际是**替人确认了一条命题**。
+        """
+        claim = self._challenged_claim()
+        # 造一个**未确认**的反驳
+        raw = scaffold.add_artifact(
+            self.conn, type_="Counterargument",
+            content={"text": "还没确认的反驳"}, origin="bob")
+        scaffold.add_relation(self.conn, kind="challenged_by",
+                              from_id=claim, to_id=raw, origin="bob")
+        self.assertEqual(scaffold.get(self.conn, raw)["state"], "proposed")
+
+        with self.assertRaises(ScaffoldError) as cm:
+            upper.promote_candidates(
+                self.conn, by="alice", debate_id=self.debate,
+                candidates=[{
+                    "signal": "challenge_counts", "evidence_ids": [raw],
+                    "seed_id": claim, "seed_type": "Claim", "n": 1,
+                    "name_source": "human", "name": upper.PENDING_NAME,
+                }])
+        self.assertIn("active", str(cm.exception))
+
+    def test_a_signal_outside_the_whitelist_is_refused(self):
+        """`§C7.1` ①：信号白名单。**票数不是证据**（不变量 #5）。"""
+        claim = self._challenged_claim()
+        for bad in ("vote_counts", "view_counts", "popularity"):
+            with self.assertRaises(ScaffoldError, msg=f"{bad} 被放过了"):
+                upper._supporting_ids(self.conn, claim, bad)
+
+    # --- ③ 命名归人 ------------------------------------------------------
+    def test_a_new_context_is_born_unnamed_and_active(self):
+        """上层节点**建出来就是 active**，但**没有名字**。
+
+        这两件事必须分开，压进同一个字段就错了：
+          - `state` 管「这条断言有没有被确认」
+          - 「还没起名」是**另一种待定**，由 `name_source` + `PENDING_NAME` 表达
+
+        上层节点不是一条新断言（它是底下已有命题的归组边），
+        所以它**不 pending 任何待批的断言** —— 既然系统一个字都没说，
+        「等谁确认」就没有对象。这正是「免确认」那条设计的理由。
+
+        ⚠️ 若留成 `proposed`：消费方会把它当成「还没被批准的断言」，
+        上层结果就被降格成待批提案，而它本来就允许影响展示顺序（`§C7.1` ④）。
+        """
+        made = self._one_context()
+        node = scaffold.get(self.conn, made)
+        self.assertEqual(node["state"], "active",
+                         "上层节点不是待批提案 —— 它建出来就该是 active")
+        content = scaffold.content_of(self.conn, made)
+        self.assertEqual(content["text"], upper.PENDING_NAME)
+        self.assertEqual(content["name_source"], "human")
+
+    def _one_context(self) -> str:
+        claim = self._challenged_claim()
+        cands = upper.propose_clusters(self.conn)
+        made = upper.promote_candidates(
+            self.conn, candidates=cands["candidates"], by="alice",
+            debate_id=self.debate)
+        self.assertEqual(len(made), 1)
+        return made[0]
+
+    def test_renaming_keeps_the_evidence_and_the_signal(self):
+        """⚠️ **改名只改名字，其余字段原样带走。**
+
+        `revise()` 换的是**整个 content**（那是对的 —— 它是通用版本接口），
+        所以 `rename_context()` 必须**读-改-写**。
+
+        **实测踩过这个坑**：第一版只传了 `{"text": name, "name_source": "human"}`，
+        改完名之后 `signal` 变成 `None`、`evidence_ids` 变成 `[]` ——
+        **依据全丢了**，而视图照样正常印出名字，看起来完全没问题。
+        这正是「坏起来不像坏」：改完名之后，就再也说不清
+        「这个上层节点当初是根据什么长出来的」。
+        """
+        ctx = self._one_context()
+        before = scaffold.content_of(self.conn, ctx)
+        self.assertTrue(before["evidence_ids"], "用例前提：建出来时是有依据的")
+
+        upper.rename_context(self.conn, context_id=ctx, name="起个名字", by="alice")
+
+        after = scaffold.content_of(self.conn, ctx)
+        self.assertEqual(after["text"], "起个名字")
+        self.assertEqual(after["evidence_ids"], before["evidence_ids"],
+                         "改名把依据弄丢了")
+        self.assertEqual(after["signal"], before["signal"],
+                         "改名把信号类型弄丢了")
+        self.assertEqual(after["induction_version"], before["induction_version"],
+                         "改名把规则集版本弄丢了")
+        # 视图上也必须还看得见 —— 「字段还在」和「视图印得出」是两件事
+        view = upper.ordered_view(self.conn, self.debate)["contexts"][0]
+        self.assertEqual(view["evidence_ids"], before["evidence_ids"])
+        self.assertEqual(view["signal"], before["signal"])
+
+    def test_renaming_is_a_revision_and_does_not_touch_the_lower_layer(self):
+        """命名走 `revise`（不覆盖，`§C10`）—— 而且**不碰底层**。"""
+        ctx = self._one_context()
+        claim = self.conn.execute(
+            "SELECT from_id FROM relation WHERE kind='challenged_by'"
+        ).fetchone()[0]
+        ids = [claim] + self._challenger_ids(claim)
+        before = self._lower_snapshot(ids)
+
+        upper.rename_context(self.conn, context_id=ctx, name="围绕假设甲的分歧",
+                             by="alice")
+        self.assertEqual(scaffold.content_of(self.conn, ctx)["text"],
+                         "围绕假设甲的分歧")
+        self.assertEqual(self._lower_snapshot(ids), before, "命名碰了底层")
+        # 不覆盖：旧的那一版（PENDING_NAME）还在 revision 表里。
+        # ⚠️ `history_of` 返回的是 **dict**（`{"revisions": [...], "heads": ...}`），
+        # 不是列表 —— 第一版这里写成 `len(revs)` 量出来是 6（字典的键数），
+        # 看着像「有 6 个版本」，其实是量错了东西。
+        revs = scaffold.history_of(self.conn, ctx)["revisions"]
+        self.assertEqual(len(revs), 2, "命名没走 revise —— 旧版本被覆盖了")
+        self.assertEqual([r["content"]["text"] for r in revs],
+                         [upper.PENDING_NAME, "围绕假设甲的分歧"])
+
+    def test_renaming_twice_keeps_both_versions(self):
+        ctx = self._one_context()
+        upper.rename_context(self.conn, context_id=ctx, name="第一版", by="alice")
+        upper.rename_context(self.conn, context_id=ctx, name="第二版", by="bob")
+        revs = scaffold.history_of(self.conn, ctx)["revisions"]
+        self.assertEqual(len(revs), 3, "二次改名覆盖了上一版")
+        self.assertEqual([r["content"]["text"] for r in revs][-2:],
+                         ["第一版", "第二版"])
+        # 谁改的也留得住
+        self.assertEqual([r["author"] for r in revs][-2:], ["alice", "bob"])
+
+    def test_an_empty_name_and_the_placeholder_are_both_refused(self):
+        """`PENDING_NAME` **不是占位符，是设计前提** —— 不许拿它当名字。
+
+        空名也一样拒：留空是**建的时候**的状态，不是**命名的时候**的输入。
+        """
+        ctx = self._one_context()
+        with self.assertRaises(ScaffoldError):
+            upper.rename_context(self.conn, context_id=ctx, name="  ", by="alice")
+        with self.assertRaises(ScaffoldError):
+            upper.rename_context(self.conn, context_id=ctx,
+                                 name=upper.PENDING_NAME, by="alice")
+
+    def test_renaming_a_lower_layer_node_is_refused(self):
+        """`rename_context` 只管上层节点 —— 拿底层节点调它要报。"""
+        claim = self._challenged_claim()
+        with self.assertRaises(ScaffoldError):
+            upper.rename_context(self.conn, context_id=claim, name="x", by="alice")
+
+    # --- ④ 视图只影响那三样 ----------------------------------------------
+    def test_the_view_only_offers_order_expansion_and_candidates(self):
+        """`§C7.1` ④ 允许上层影响的**全部三种**：顺序 / 默认展开 / 推荐候选。
+
+        视图里**不许**出现任何「哪条命题更重要 / 更对」的字段。
+        """
+        ctx = self._one_context()
+        v = upper.ordered_view(self.conn, self.debate)
+        self.assertEqual([c["context"]["id"] for c in v["contexts"]], [ctx])
+        keys = set()
+        for c in v["contexts"]:
+            keys |= set(c.keys())
+        self.assertTrue(
+            keys <= {"context", "name", "named", "signal", "evidence_ids",
+                     "history"},
+            f"视图多出了字段：{keys} —— 上层不许表达「谁更重要」")
+        # 拿 checks.py 自己的规则断言，不另抄一份禁词
+        flat = json.dumps(v, ensure_ascii=False)
+        for entry in checks.CHECKS:
+            self.assertIsNone(re.search(entry[2], flat, re.I),
+                              f"上层视图里出现了 {entry[0]} 要挡的东西")
+
+    def test_the_context_is_reachable_from_its_debate(self):
+        """挂在 Debate 下 —— 否则任何 `ordered_view` 都到不了它。
+
+        「存在但谁也看不见」比不存在更坏：它占着 id，却不在任何一张视图里。
+        """
+        ctx = self._one_context()
+        row = self.conn.execute(
+            "SELECT r.from_id FROM relation r"
+            " WHERE r.to_id=? AND r.kind='contains' AND r.state='active'",
+            (ctx,)).fetchone()
+        self.assertIsNotNone(row, "上层节点没挂在任何东西下 —— 它是悬空的")
+        self.assertEqual(row["from_id"], self.debate)
+
+    def test_an_unanchored_context_leaves_a_trace(self):
+        """没有锚点时**必须留痕**，不许静默吞掉。
+
+        症状会是「节点建出来了，但任何视图都看不见它」。留一笔事件，
+        让失败**看起来像失败**，而不是像「本来就啥也没有」。
+
+        ⚠️ 造这个场景要**真的让它没有锚点**：`_one_claim()` 造的命题挂在
+        Topic 下，而 Topic 又挂在 Debate 下 —— `_anchor_of()` 顺着 `contains`
+        往上走**找得到** Debate。所以第一版用 `_one_claim()` 写的用例其实
+        **测的是有锚点的那条路**，断言直接空过了（实测：拿到的是
+        `upper_context_proposed`，不是 `unanchored`）。
+        这里改成手工造一条**不挂任何 Topic** 的命题。
+        """
+        claim = scaffold.add_artifact(
+            self.conn, type_="Claim", content={"text": "一条没人挂过的假设"},
+            origin="alice")
+        scaffold.activate(self.conn, claim, by="alice")
+        for i in range(3):
+            c = scaffold.add_artifact(
+                self.conn, type_="Counterargument",
+                content={"text": f"驳{i}"}, origin="bob")
+            scaffold.activate(self.conn, c, by="bob")
+            scaffold.add_relation(self.conn, kind="challenged_by",
+                                  from_id=claim, to_id=c, origin="bob")
+        self.assertIsNone(upper._anchor_of(self.conn, claim),
+                          "这条命题居然有锚点 —— 用例没测到悬空那一路")
+
+        cands = upper.propose_clusters(self.conn)
+        self.assertTrue(cands["candidates"])
+        upper.promote_candidates(self.conn, candidates=cands["candidates"],
+                                 by="alice")
+        kinds = {r[0] for r in self.conn.execute(
+            "SELECT kind FROM event WHERE kind LIKE 'upper%'")}
+        self.assertIn("upper_context_unanchored", kinds,
+                      "悬空的上层节点没有留痕 —— 失败和成功长得一模一样")
+
+    # --- ⑤ 空结果必须附一句话 --------------------------------------------
+    def test_an_empty_scan_says_why_and_what_it_cannot_see(self):
+        """同 `hints.scan()` 的规矩：**算不出 ≠ 零**。
+
+        这条不许只回一个 `[]` 了事 —— 那和「底层真的没有信号」长得一样。
+        """
+        out = upper.scan(self.conn, self.debate)
+        self.assertEqual(out["contexts"], [])
+        self.assertIsNotNone(out["empty_reason"], "空结果没说为什么空")
+        self.assertTrue(out["blind_spots"], "空结果没列盲区")
+        self.assertIn("候选", out["note"])
+
+
+class TestUpperLayerIsDormantOnAYoungCorpus(Base):
+    """MVP 阶段本机制**应当**是休眠的 —— 这是一个**可证伪的预言**。
+
+    `§C7.1` 白纸黑字说 MVP 阶段全程休眠。所以「跑出 0 条」不是失败，
+    **是文档说的那个结果**。这条用例把它钉住：
+    哪天它开始吐出候选，要么是真的攒够信号了，要么是判据被放宽了 ——
+    两种都该被人看见。
+    """
+
+    def test_three_signals_are_all_zero_after_eight_plain_drafts(self):
+        confirm.ensure_schema(self.conn)
+        d = debate.open_debate(self.conn, question="Q", by="alice")["debate"]
+        # 8 段**互不重复**的原文：没有重复质询、没有重复修正
+        for i in range(8):
+            _confirmed(self.conn, debate_id=d, text=f"这是第 {i} 段不同的话。",
+                       by=f"u{i}")
+        sig = upper.count_signals(self.conn)
+        # revision_counts 会因为「同一命题被改过」>0 —— 这里一次没改过
+        self.assertEqual(sig["challenge_counts"], {},
+                         "没人质询过任何东西，却有挑战计数")
+        self.assertEqual(sig["dispute_counts"], {},
+                         "没人反驳过任何东西，却有争议计数")
+        self.assertEqual(sig["revision_counts"], {},
+                         "没人修正过任何东西，却有修正计数")
+        self.assertEqual(upper.propose_clusters(self.conn)["candidates"], [],
+                         "休眠预言不成立了 —— 要么信号判据放宽了，要么真攒够了")
 
 
 if __name__ == "__main__":

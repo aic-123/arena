@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 # 所以 `§C3.1` 当**下界**读，不当闭集读。
 ARTIFACT_TYPES = (
     "Topic",           # §C3.1
+    "Position",        # §C4 —— §C3.1 的枚举漏了它，见下方注释
     "Claim",           # §C3.1
     "Evidence",        # §C3.1
     "Argument",        # §C3.1
@@ -52,7 +53,35 @@ ARTIFACT_TYPES = (
     "Counterexample",  # §C4
     "Counterargument", # §C4
     "Challenge",       # §C3.4
+    "Context",         # §C7.1 —— 上层节点，见下方注释
 )
+
+# ⚠️ `Context` 是**上层**节点（`§C7.1` 的 Context Scaffold），
+# 与上面那些**底层**类型有一条硬边界，不能混：
+#
+#     底层（Topic/Position/Claim/Evidence…）  记事实。确认环节授予 active（§C2.5）
+#     上层（Context）                        只派生。**不得写底层任何字段**（§C7.1 ④）
+#
+# 它进这张表的理由与 `Position` 不同 —— `Position` 是 `§C4` 画漏了；
+# `Context` 是 `§C4` **没规定**（`§C7.1` 只说了机制，没说节点叫什么类型），
+# 所以走 `§T4` 的留白项：自选 + 声明 + 可回退。它不在任何文档的枚举里，
+# **这一点必须说清**，别让它看起来像 `§C3.1` 漏了一个。
+
+# ⚠️ `Position` 不在 `§C3.1` 的枚举里，但 `§C4` 的结构树**第一行就用它**：
+#
+#     Topic
+#     ├── Position / Claim        ← 这一行
+#     │   ├── Evidence ...
+#     └── Opposing Claim
+#
+# 与 `Mechanism` / `Assumption` / `Counterexample` / `Counterargument` 属于**同一类漏项**
+# —— 那几个也不在 `§C3.1` 里，而 `§C4` 的树全用到了。既有的处理是
+# 「把 `§C3.1` 当**下界**读，不当闭集读」（DECLARATION §5），此处沿用同一条，
+# 不新增争议：它和那四个是同一个判决，不是一次新的放宽。
+#
+# `§C4` 那句「必须逐条落地，不可合并」针对的是**关系映射表**，
+# 但树的形状本身也是结构要求 —— `Position` 是树上一个确定的层
+# （需求方 2026-09-27 明确要求「论点一层」，并认可二元对立暂代多立场）。
 
 # `§C3.2` 的六种，并上 `§C4` / `§C6.3` 要求但未列入的四种。同上，取并集。
 RELATION_KINDS = (
@@ -78,6 +107,14 @@ RELATION_KINDS = (
     # 名称用文件给的两个词：前提 / 结论。
     "causal_premise",    # 缺口①  因 → 因果主张（「这条是该因果主张的前提」）
     "causal_conclusion", # 缺口①  果 → 因果主张
+    # ---- `§C7.1` 上层（Context Scaffold）—— 需求方 2026-09-27 ----------------
+    # ⚠️ **这一条与前两种性质不同，必须分清**：前两种是底层边（记事实），
+    # 这一条是**上层边**（只派生）。它不是底层的真值边 —— 整批删掉，
+    # 底层一字不少。`§C7.1` ④ 的单向性约束就落在这条边不许反向。
+    #
+    # 名字取「被并进某个上下文」的意思，不取「相似于」：
+    # 「相似」是一种距离判断，而本层只用结构量（见 upper.py 模块开头）。
+    "clustered_into",    # §C7.1  底层节点 → 上层 Context
 )
 
 # Artifact 生命周期（`§C3.1`「具有独立身份、状态、生命周期」）。
@@ -187,10 +224,11 @@ def init(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 _PREFIX = {
-    "Topic": "topic", "Claim": "claim", "Evidence": "evid",
+    "Topic": "topic", "Position": "pos", "Claim": "claim", "Evidence": "evid",
     "Argument": "arg", "Debate": "debate", "Vote": "vote",
     "Subtopic": "sub", "Mechanism": "mech", "Assumption": "assume",
     "Counterexample": "cex", "Counterargument": "carg", "Challenge": "chal",
+    "Context": "ctx",      # §C7.1 上层节点 —— 前缀独立，一眼分出上下层
 }
 
 
