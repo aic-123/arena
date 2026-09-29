@@ -230,6 +230,7 @@ Following `§T2` in order, **no skipping steps**.
 | 13/14 Fix it / run again | Done — the colliding parameters went from 1/4/10 collisions to 0; pushed to 8 processes × 12 rounds, still 0 |
 | 15 Five ontology gaps exposed by the label file | Done — all five concluded. Also **not one of the 14 steps** |
 | — Stance layer (question → stance → argument) | Done — 2026-09-27. **Not one of the 14 steps**; added by the requester on site, see DECLARATION §21 |
+| — Usage records ("who read which passage") | **Not added** — decided 2026-09-29 to use the existing `draft.state` instead. Such a record would become a **popularity signal** (`§C9` #5), and `record_event()` explicitly forbids manufacturing events for collection. See DECLARATION §23 |
 
 Steps 10–14 are done, but **two things are unresolved — don't read that as "concurrency is fine now"**:
 
